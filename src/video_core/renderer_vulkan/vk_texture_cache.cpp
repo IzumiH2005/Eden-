@@ -2342,6 +2342,11 @@ Sampler::Sampler(TextureCacheRuntime& runtime, const Tegra::Texture::TSCEntry& t
     // Some games have samplers with garbage. Sanitize them here.
     const f32 max_anisotropy = std::clamp(tsc.MaxAnisotropy(), 1.0f, 16.0f);
 
+    // EdEn.claude: optionally keep mipmapped textures off their most detailed levels.
+    const f32 forced_min_lod = static_cast<f32>(Settings::values.texture_min_lod.GetValue());
+    const f32 min_lod = (std::max)(tsc.MinLod(), forced_min_lod);
+    const f32 max_lod = (std::max)(tsc.MaxLod(), min_lod);
+
     const auto create_sampler = [&](const f32 anisotropy, bool force_nearest = false) {
         return device.GetLogical().CreateSampler(VkSamplerCreateInfo{
             .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
@@ -2361,8 +2366,8 @@ Sampler::Sampler(TextureCacheRuntime& runtime, const Tegra::Texture::TSCEntry& t
             .maxAnisotropy = anisotropy,
             .compareEnable = tsc.depth_compare_enabled,
             .compareOp = MaxwellToVK::Sampler::DepthCompareFunction(tsc.depth_compare_func),
-            .minLod = tsc.mipmap_filter == TextureMipmapFilter::None ? 0.0f : tsc.MinLod(),
-            .maxLod = tsc.mipmap_filter == TextureMipmapFilter::None ? 0.25f : tsc.MaxLod(),
+            .minLod = tsc.mipmap_filter == TextureMipmapFilter::None ? 0.0f : min_lod,
+            .maxLod = tsc.mipmap_filter == TextureMipmapFilter::None ? 0.25f : max_lod,
             .borderColor = has_custom_border_colors ? VK_BORDER_COLOR_FLOAT_CUSTOM_EXT
                                                     : ConvertBorderColor(color),
             .unnormalizedCoordinates = VK_FALSE,

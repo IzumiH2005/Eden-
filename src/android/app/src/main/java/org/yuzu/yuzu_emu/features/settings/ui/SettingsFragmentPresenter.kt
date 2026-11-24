@@ -297,6 +297,7 @@ class SettingsFragmentPresenter(
             add(BooleanSetting.AMD_FP32_SHADERS.key)
             add(BooleanSetting.AMD_NAN_SAFE_MATH.key)
             add(BooleanSetting.XCLIPSE_SOFT_ASTC.key)
+            add(IntSetting.TEXTURE_MIN_LOD.key)
             add(BooleanSetting.DIAG_SCALED_VERTEX.key)
             add(BooleanSetting.DIAG_NO_FLOAT_CONTROLS.key)
             add(BooleanSetting.DIAG_NO_GATHER_OFFSET.key)

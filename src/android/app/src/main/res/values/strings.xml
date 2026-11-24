@@ -535,6 +535,8 @@
     <string name="diag_no_stencil_export_description">Removes VK_EXT_shader_stencil_export, so depth/stencil copies take the Adreno path.</string>
     <string name="diag_no_int64">Diag F: disable 64-bit integers</string>
     <string name="diag_no_int64_description">Disables shader int64 and int64 atomics, as on Adreno.</string>
+    <string name="texture_min_lod">Minimum texture detail level</string>
+    <string name="texture_min_lod_description">Never use the N most detailed levels of textures (0 = off). Textures are blurrier up close. Workaround for corruption that appears when getting close to characters. Restart the game after changing.</string>
     <string name="rescale_hack_description">Enables a legacy handling for the rescale configuration pass for games by using a quick rescale path</string>
     <string name="renderer_asynchronous_shaders">Use asynchronous shaders</string>
     <string name="renderer_asynchronous_shaders_description">Compiles shaders asynchronously. This may reduce stutters but may also introduce glitches.</string>

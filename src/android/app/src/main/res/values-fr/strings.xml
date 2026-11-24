@@ -1129,4 +1129,6 @@
     <string name="share_shader_cache">Partager le cache de shaders (diagnostic)</string>
     <string name="share_shader_cache_description">Partage le cache de shaders du dernier jeu lancé, pour analyser un bug graphique. Ne contient ni clés ni sauvegardes.</string>
     <string name="share_shader_cache_missing">Aucun cache de shaders trouvé</string>
+    <string name="texture_min_lod">Niveau de détail minimal des textures</string>
+    <string name="texture_min_lod_description">N\'utilise jamais les N niveaux les plus détaillés des textures (0 = désactivé). Textures plus floues de près. Contournement pour les corruptions qui apparaissent en s\'approchant des personnages. Relancez le jeu après modification.</string>
 </resources>

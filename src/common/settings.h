@@ -570,6 +570,10 @@ struct Values {
     // hardware ASTC decoder (Samsung driver and RADV ports both use it).
     SwitchableSetting<bool> xclipse_soft_astc{linkage, false, "xclipse_soft_astc",
                                               Category::RendererHacks};
+    // Never sample the N most detailed mip levels of mipmapped textures (0 = off). Workaround
+    // and diagnostic for corruption that only shows once close-up texture detail streams in.
+    SwitchableSetting<int, true> texture_min_lod{linkage, 0, 0, 4, "texture_min_lod",
+                                                 Category::RendererHacks, Specialization::Scalar};
     // EdEn.claude diagnostics: each one switches an Xclipse/AMD code path to what Eden does on
     // Adreno, where the skin bug does not happen. Only applied on AMD-architecture GPUs.
     SwitchableSetting<bool> diag_scaled_vertex{linkage, true, "diag_scaled_vertex", Category::RendererHacks};
