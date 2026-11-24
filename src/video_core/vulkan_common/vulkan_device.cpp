@@ -6,6 +6,9 @@
 
 #include <algorithm>
 #include <bitset>
+#include <mutex>
+#include <set>
+#include <tuple>
 #include <chrono>
 #include <optional>
 #include <thread>
@@ -797,6 +800,20 @@ VkFormat Device::GetSupportedFormat(VkFormat wanted_format, VkFormatFeatureFlags
                                     FormatType format_type) const {
     if (IsFormatSupported(wanted_format, wanted_usage, format_type)) {
         return wanted_format;
+    }
+    {
+        // EdEn.claude diagnostics: report each format substitution once at warning level.
+        static std::mutex seen_mutex;
+        static std::set<std::tuple<u32, u32, u32>> seen;
+        std::scoped_lock lock{seen_mutex};
+        if (seen.emplace(static_cast<u32>(wanted_format), static_cast<u32>(wanted_usage),
+                         static_cast<u32>(format_type))
+                .second) {
+            LOG_WARNING(Render_Vulkan,
+                        "[EdEn.claude] format {} not supported for usage=0x{:x} type={}, "
+                        "looking for an alternative",
+                        wanted_format, wanted_usage, static_cast<u32>(format_type));
+        }
     }
     // The wanted format is not supported by hardware, search for alternatives
     const VkFormat* alternatives = GetFormatAlternatives(wanted_format);

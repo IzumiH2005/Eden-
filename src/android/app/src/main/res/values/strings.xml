@@ -326,6 +326,9 @@
     <string name="share_log">Share debug logs</string>
     <string name="share_log_description">Share Eden\'s log file to debug issues</string>
     <string name="share_log_missing">No log file found</string>
+    <string name="share_shader_cache">Share shader cache (diagnostic)</string>
+    <string name="share_shader_cache_description">Share the shader cache of the last game played, for rendering bug analysis. Contains no keys or saves.</string>
+    <string name="share_shader_cache_missing">No shader cache found</string>
     <string name="share_gpu_log">Share GPU logs</string>
     <string name="share_gpu_log_description">Share Eden\'s GPU log file to debug graphics issues</string>
     <string name="share_gpu_log_missing">No GPU log file found</string>

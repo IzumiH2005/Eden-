@@ -14,6 +14,7 @@
 #include <numeric>
 #include <mutex>
 #include <set>
+#include <tuple>
 #include <utility>
 #include "common/bit_util.h"
 #include "common/settings.h"
@@ -172,6 +173,23 @@ constexpr VkBorderColor ConvertBorderColor(const std::array<float, 4>& color) {
         return vk::Image{};
     }
     VkImageCreateInfo image_ci = MakeImageCreateInfo(device, info);
+    {
+        // EdEn.claude diagnostics: log every distinct guest format -> host image once, so the
+        // shared log shows which formats a game really uses on this GPU.
+        static std::mutex seen_mutex;
+        static std::set<std::tuple<u32, u32, u32>> seen;
+        std::scoped_lock lock{seen_mutex};
+        if (seen.emplace(static_cast<u32>(info.format), static_cast<u32>(image_ci.format),
+                         static_cast<u32>(image_ci.usage))
+                .second) {
+            LOG_INFO(Render_Vulkan,
+                     "[EdEn.claude] image format guest={} host={} usage=0x{:x} samples={} "
+                     "size={}x{}x{} levels={} layers={}",
+                     info.format, image_ci.format, image_ci.usage, info.num_samples,
+                     info.size.width, info.size.height, info.size.depth, info.resources.levels,
+                     info.resources.layers);
+        }
+    }
     const VkImageFormatListCreateInfo image_format_list = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO,
         .pNext = nullptr,

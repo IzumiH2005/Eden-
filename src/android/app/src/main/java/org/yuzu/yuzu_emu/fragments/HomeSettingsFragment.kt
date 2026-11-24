@@ -31,6 +31,7 @@ import org.yuzu.yuzu_emu.HomeNavigationDirections
 import org.yuzu.yuzu_emu.NativeLibrary
 import org.yuzu.yuzu_emu.R
 import org.yuzu.yuzu_emu.YuzuApplication
+import org.yuzu.yuzu_emu.getPublicFilesDir
 import org.yuzu.yuzu_emu.adapters.HomeSettingAdapter
 import org.yuzu.yuzu_emu.databinding.FragmentHomeSettingsBinding
 import org.yuzu.yuzu_emu.features.DocumentProvider
@@ -273,6 +274,14 @@ class HomeSettingsFragment : Fragment() {
             )
             add(
                 HomeSetting(
+                    R.string.share_shader_cache,
+                    R.string.share_shader_cache_description,
+                    R.drawable.ic_log,
+                    { shareShaderCache() }
+                )
+            )
+            add(
+                HomeSetting(
                     R.string.share_gpu_log,
                     R.string.share_gpu_log_description,
                     R.drawable.ic_log,
@@ -465,6 +474,35 @@ class HomeSettingsFragment : Fragment() {
                 Toast.LENGTH_SHORT
             ).show()
         }
+    }
+
+    // EdEn.claude diagnostics: share the guest shader cache (vulkan.bin) of the most recently
+    // played game, so its shaders can be rebuilt and inspected offline. It holds no keys or saves.
+    private fun shareShaderCache() {
+        val baseDirectory = java.io.File(YuzuApplication.application.getPublicFilesDir().canonicalPath)
+        val newest = baseDirectory.resolve("shader").walkTopDown()
+            .filter { it.isFile && it.name == "vulkan.bin" }
+            .maxByOrNull { it.lastModified() }
+        if (newest == null) {
+            Toast.makeText(
+                requireContext(),
+                getText(R.string.share_shader_cache_missing),
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+        val document = DocumentFile.fromSingleUri(
+            mainActivity,
+            DocumentsContract.buildDocumentUri(
+                DocumentProvider.AUTHORITY,
+                "${DocumentProvider.ROOT_ID}/${newest.toRelativeString(baseDirectory)}"
+            )
+        )!!
+        val intent = Intent(Intent.ACTION_SEND)
+            .setDataAndType(document.uri, "application/octet-stream")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            .putExtra(Intent.EXTRA_STREAM, document.uri)
+        startActivity(Intent.createChooser(intent, getText(R.string.share_shader_cache)))
     }
 
     private fun shareGpuLog() {

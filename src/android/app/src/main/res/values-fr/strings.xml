@@ -1126,4 +1126,7 @@
     <string name="diag_no_stencil_export_description">Retire VK_EXT_shader_stencil_export : les copies profondeur/stencil prennent le chemin Adreno.</string>
     <string name="diag_no_int64">Diag F : désactiver les entiers 64 bits</string>
     <string name="diag_no_int64_description">Désactive les entiers 64 bits et leurs atomiques dans les shaders, comme sur Adreno.</string>
+    <string name="share_shader_cache">Partager le cache de shaders (diagnostic)</string>
+    <string name="share_shader_cache_description">Partage le cache de shaders du dernier jeu lancé, pour analyser un bug graphique. Ne contient ni clés ni sauvegardes.</string>
+    <string name="share_shader_cache_missing">Aucun cache de shaders trouvé</string>
 </resources>
