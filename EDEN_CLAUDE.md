@@ -14,7 +14,18 @@ Sur Xclipse, la peau des personnages devient **blanche avec un halo de bloom** o
 Un halo blanc correspond à une valeur infinie, une zone noire à un NaN. Ces valeurs naissent dans
 les shaders d'éclairage.
 
-## Correction principale (fix2) : conversions profondeur → couleur rétablies
+## Test fix3 : décodage ASTC logiciel sur Xclipse
+
+Sur Xclipse, la peau se corrompt **quand on s'approche** d'un personnage, c'est-à-dire quand les
+niveaux de détail haute résolution de ses textures sont chargés. Le Xclipse est le seul GPU
+d'architecture AMD qui décode l'ASTC, avec un bloc matériel Samsung utilisé par le pilote Samsung
+comme par radv-xclipse. Les deux pilotes présentent le même bug.
+
+L'option **« Décodage ASTC logiciel sur Xclipse »** (activée par défaut) masque l'ASTC natif :
+Eden décode alors les textures ASTC lui-même sur le GPU, comme sur les PC sans ASTC.
+Fichier : `vulkan_device.cpp`.
+
+## Correction fix2 : conversions profondeur → couleur rétablies
 
 Le commit Eden `3e835ac3aa` (« Add new shader format conversion pipelines », 1er février 2025) a
 réécrit `TextureCacheRuntime::ConvertImage` et supprimé les conversions profondeur → couleur

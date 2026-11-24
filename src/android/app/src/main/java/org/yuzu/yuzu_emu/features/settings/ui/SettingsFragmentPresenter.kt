@@ -296,6 +296,7 @@ class SettingsFragmentPresenter(
             add(BooleanSetting.RESCALE_HACK.key)
             add(BooleanSetting.AMD_FP32_SHADERS.key)
             add(BooleanSetting.AMD_NAN_SAFE_MATH.key)
+            add(BooleanSetting.XCLIPSE_SOFT_ASTC.key)
             add(BooleanSetting.RENDERER_ASYNCHRONOUS_SHADERS.key)
             add(IntSetting.ANDROID_PIPELINE_WORKERS.key)
             add(BooleanSetting.RENDERER_ASYNCHRONOUS_GPU_EMULATION.key)

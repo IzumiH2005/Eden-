@@ -21,6 +21,7 @@ enum class BooleanSetting(override val key: String) : AbstractBooleanSetting {
     RESCALE_HACK("rescale_hack"),
     AMD_FP32_SHADERS("amd_fp32_shaders"),
     AMD_NAN_SAFE_MATH("amd_nan_safe_math"),
+    XCLIPSE_SOFT_ASTC("xclipse_soft_astc"),
     CPUOPT_UNSAFE_HOST_MMU("cpuopt_unsafe_host_mmu"),
     USE_DOCKED_MODE("use_docked_mode"),
     USE_AUTO_STUB("use_auto_stub"),

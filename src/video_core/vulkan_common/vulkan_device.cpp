@@ -629,6 +629,19 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         features.shader_float16_int8.shaderFloat16 = false;
     }
 
+    // EdEn.claude: Xclipse is the only AMD-architecture GPU with ASTC, decoded by a Samsung
+    // texture-unit block (desktop AMD has none). Characters' skin and hair go white or dark
+    // there once their close-up texture mips stream in, with both Samsung's driver and RADV
+    // ports. Optionally hide native ASTC so Eden decodes ASTC itself, as on desktop GPUs.
+    if (features.features.textureCompressionASTC_LDR && IsAmdArchitecture() &&
+        Settings::values.xclipse_soft_astc.GetValue()) {
+        LOG_WARNING(Render_Vulkan,
+                    "Xclipse ({}): hardware ASTC decoding disabled, using Eden's ASTC decoder",
+                    properties.driver.driverName);
+        features.features.textureCompressionASTC_LDR = false;
+        is_optimal_astc_supported = false;
+    }
+
     if (features.shader_float16_int8.shaderFloat16 && is_intel_windows) {
         // Intel's compiler crashes when using fp16 on Astral Chain, disable it for the time being.
         LOG_WARNING(Render_Vulkan, "Intel has broken float16 math");

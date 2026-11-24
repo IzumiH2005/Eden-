@@ -1112,4 +1112,6 @@
     <string name="amd_fp32_shaders_description">Calcule en FP32 les opérations demi-précision (FP16) des shaders sur les GPU Samsung Xclipse et AMD. Corrige la peau des personnages qui devient blanche ou très sombre. Relancez le jeu après modification.</string>
     <string name="amd_nan_safe_math">Calcul anti-NaN sur Xclipse/AMD</string>
     <string name="amd_nan_safe_math_description">Reproduit exactement le comportement min/max/saturate du GPU de la Switch avec les valeurs NaN sur les GPU Samsung Xclipse et AMD, pour que des valeurs invalides ne rendent plus des surfaces noires ou blanches. Relancez le jeu après modification.</string>
+    <string name="xclipse_soft_astc">Décodage ASTC logiciel sur Xclipse</string>
+    <string name="xclipse_soft_astc_description">Décode les textures ASTC avec le décodeur GPU d\'Eden au lieu du décodeur matériel des GPU Samsung Xclipse. Test pour la peau des personnages qui devient blanche ou sombre de près. Utilise plus de VRAM. Relancez le jeu après modification.</string>
 </resources>

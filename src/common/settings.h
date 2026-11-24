@@ -566,6 +566,10 @@ struct Values {
     // saturate(NaN) == 0) instead of relying on undefined SPIR-V FMin/FMax/FClamp behaviour.
     SwitchableSetting<bool> amd_nan_safe_math{linkage, true, "amd_nan_safe_math",
                                               Category::RendererHacks};
+    // Decode ASTC textures with Eden's own GPU decoder instead of the Xclipse texture unit's
+    // hardware ASTC decoder (Samsung driver and RADV ports both use it).
+    SwitchableSetting<bool> xclipse_soft_astc{linkage, true, "xclipse_soft_astc",
+                                              Category::RendererHacks};
 
     SwitchableSetting<bool> emulate_bgr565{linkage, false, "emulate_bgr565",
                                             Category::RendererHacks};

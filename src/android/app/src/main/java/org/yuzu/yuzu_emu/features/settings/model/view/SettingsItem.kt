@@ -780,6 +780,13 @@ abstract class SettingsItem(
             )
             put(
                 SwitchSetting(
+                    BooleanSetting.XCLIPSE_SOFT_ASTC,
+                    titleId = R.string.xclipse_soft_astc,
+                    descriptionId = R.string.xclipse_soft_astc_description
+                )
+            )
+            put(
+                SwitchSetting(
                     BooleanSetting.EMULATE_BGR565,
                     titleId = R.string.emulate_bgr565,
                     descriptionId = R.string.emulate_bgr565_description
