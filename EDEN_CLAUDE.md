@@ -14,7 +14,23 @@ Sur Xclipse, la peau des personnages devient **blanche avec un halo de bloom** o
 Un halo blanc correspond à une valeur infinie, une zone noire à un NaN. Ces valeurs naissent dans
 les shaders d'éclairage.
 
-## Corrections
+## Correction principale (fix2) : conversions profondeur → couleur rétablies
+
+Le commit Eden `3e835ac3aa` (« Add new shader format conversion pipelines », 1er février 2025) a
+réécrit `TextureCacheRuntime::ConvertImage` et supprimé les conversions profondeur → couleur
+héritées de yuzu (`D24S8 → RGBA8`, `D32 → RGBA8`, `D32 → R32`, `D16 → R16`, `RGBA8 → S8D24`…),
+alors que les shaders et les fonctions de conversion existent toujours.
+
+`TextureCache::CopyImage` n'envoie ces copies à `ConvertImage` que sur les GPU qui ont
+`VK_EXT_shader_stencil_export` : AMD, NVIDIA et **Samsung Xclipse**, jamais Adreno (qui passe par
+`ReinterpretImage`). Sur Xclipse, chaque fois qu'un jeu relisait sa profondeur comme une texture
+couleur (éclairage différé, diffusion sous la peau, SSAO…), Eden **ne faisait rien**. Le jeu lisait
+alors une image périmée ou vide, d'où une peau blanche ou au mauvais teint.
+
+Fichier : `src/video_core/renderer_vulkan/vk_texture_cache.cpp`. Les conversions encore non gérées
+sont désormais signalées une fois chacune dans le journal (`Unimplemented texture conversion`).
+
+## Corrections précédentes (fix1)
 
 | Correction | Fichiers | Option Android |
 |---|---|---|
