@@ -6,6 +6,33 @@ pour les GPU **Samsung Xclipse** (Exynos, architecture AMD RDNA), par exemple le
 
 L'APK s'installe **à côté** d'Eden (nom « EdEn.claude », paquet `dev.eden.eden_emulator.claude`).
 
+## Correction fix6 : erreurs révélées par la validation Vulkan
+
+Le journal avec « Débogage des graphismes » (validation Vulkan) et le cache de shaders de The
+Witcher 3, analysé avec `tools/eden-shader-dump`, montrent deux erreurs qui n'existent que sur
+Xclipse.
+
+**A. Filtrage linéaire sur des formats non filtrables.** Le D24S8 de la Switch est émulé en
+`D32_SFLOAT_S8_UINT` sur Xclipse, et ce format, comme `R32_SFLOAT`, `R32G32B32A32_SFLOAT`,
+`R16_UNORM` et les formats entiers, ne supporte pas le filtrage linéaire sur ce GPU. Les shaders
+qui lisent la profondeur (reconstruction de distance, passes plein écran, compute) obtenaient
+donc des valeurs indéfinies. Correction : chaque échantillonneur a désormais une variante
+« nearest », utilisée automatiquement avec les vues dont le format n'est pas filtrable
+(`vk_texture_cache.cpp/.h`, `pipeline_helper.h`).
+
+**B. Textures entières lues par un échantillonneur flottant.** Une texture `R16_UINT` sert
+d'index : 16 bits découpés en champs (`bitfieldExtract`) qui servent d'indices dans les tables
+de paramètres de matériau (shader `d9d4102bbe644ac1`, qui écrit 3 cibles de type G-buffer).
+Eden la déclarait comme une texture flottante, ce qui est indéfini en Vulkan. Si le GPU convertit
+l'entier en flottant au lieu de rendre les bits bruts, les indices de matériau sont faux.
+Correction : les textures au format entier sont déclarées en `usampler`/`isampler`, et leurs
+résultats sont rendus au shader bit pour bit (`texture_pass.cpp`, `shader_info.h`,
+`spirv_emit_context.*`, `emit_spirv_image.cpp`). Le cache de shaders passe en version 18, donc
+les anciens caches sont reconstruits.
+
+Vérification hors ligne : les 316 shaders du jeu, recompilés en forçant toutes les textures en
+entier, restent du SPIR-V valide (`spirv-val`, mêmes résultats qu'avant la modification).
+
 ## Problème visé
 
 Sur Xclipse, la peau des personnages devient **blanche avec un halo de bloom** ou **très sombre**

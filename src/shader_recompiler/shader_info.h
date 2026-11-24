@@ -218,6 +218,11 @@ struct TextureDescriptor {
     u32 secondary_shift_left;
     u32 count;
     u32 size_shift;
+    /// EdEn.claude: the guest texture has an integer format; sample it through an integer
+    /// (signed when is_signed) SPIR-V image so the bound UINT/SINT view matches, as Vulkan
+    /// requires, instead of a float sampler whose result is undefined.
+    bool is_integer{};
+    bool is_signed{};
 
     auto operator<=>(const TextureDescriptor&) const = default;
 };

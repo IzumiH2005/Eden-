@@ -12,6 +12,7 @@
 // Usage: eden-shader-dump <vulkan.bin> <out_dir>
 
 #include <array>
+#include <cstdlib>
 #include <cstring>
 #include <cstdio>
 #include <filesystem>
@@ -41,7 +42,8 @@
 namespace {
 
 constexpr std::array<char, 8> MAGIC_NUMBER{'y', 'u', 'z', 'u', 'c', 'a', 'c', 'h'};
-constexpr u32 CACHE_VERSION = 17;               // vk_pipeline_cache.cpp
+constexpr u32 CACHE_VERSION_MIN = 17;           // vk_pipeline_cache.cpp (17: upstream, 18: EdEn.claude)
+constexpr u32 CACHE_VERSION_MAX = 18;
 constexpr size_t GRAPHICS_KEY_SIZE = 1048;      // sizeof(Vulkan::GraphicsPipelineCacheKey), arm64
 constexpr size_t COMPUTE_KEY_SIZE = 24;         // sizeof(Vulkan::ComputePipelineCacheKey), arm64
 
@@ -136,6 +138,10 @@ public:
     Shader::TexturePixelFormat ReadTexturePixelFormat(u32 handle) override {
         const auto it{texture_pixel_formats.find(handle)};
         if (it == texture_pixel_formats.end()) {
+            // Testing aid: EDEN_DUMP_ASSUME_UINT=1 treats uncached sampled textures as R16_UINT.
+            if (std::getenv("EDEN_DUMP_ASSUME_UINT")) {
+                return Shader::TexturePixelFormat::R16_UINT;
+            }
             throw Shader::LogicError("Uncached texture pixel format");
         }
         return it->second;
@@ -230,7 +236,7 @@ int main(int argc, char** argv) {
     std::array<char, 8> magic{};
     u32 version{};
     file.read(magic.data(), magic.size()).read(reinterpret_cast<char*>(&version), sizeof(version));
-    if (magic != MAGIC_NUMBER || version != CACHE_VERSION) {
+    if (magic != MAGIC_NUMBER || version < CACHE_VERSION_MIN || version > CACHE_VERSION_MAX) {
         std::fprintf(stderr, "bad magic or cache version %u\n", version);
         return 1;
     }

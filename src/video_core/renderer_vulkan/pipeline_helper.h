@@ -198,8 +198,12 @@ inline void PushImageDescriptors(TextureCache& texture_cache,
             const Sampler& sampler{texture_cache.GetSampler(sampler_id)};
             const bool use_fallback_sampler{sampler.HasAddedAnisotropy() &&
                                             !image_view.SupportsAnisotropy()};
-            const VkSampler vk_sampler{use_fallback_sampler ? sampler.HandleWithDefaultAnisotropy()
-                                                            : sampler.Handle()};
+            VkSampler vk_sampler{use_fallback_sampler ? sampler.HandleWithDefaultAnisotropy()
+                                                      : sampler.Handle()};
+            // EdEn.claude: never linearly filter a view whose host format does not support it.
+            if (!image_view.SupportsLinearFilter() && sampler.HasNearestFallback()) {
+                vk_sampler = sampler.HandleNearest();
+            }
             guest_descriptor_queue.AddSampledImage(vk_image_view, vk_sampler);
             const bool element_rescaled{texture_cache.IsRescaling(image_view)};
             is_rescaled |= element_rescaled;

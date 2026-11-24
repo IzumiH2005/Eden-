@@ -616,6 +616,51 @@ void PatchImageSampleImplicitLod(IR::Block& block, IR::Inst& inst) {
                         ir.FPRecip(ir.ConvertUToF(32, 32, ir.CompositeExtract(texture_size, 1))))));
 }
 
+// EdEn.claude: integer sampled-texture formats (mirror of VideoCore::Surface::IsPixelFormatInteger).
+bool IsSampledPixelFormatInteger(TexturePixelFormat pixel_format) {
+    switch (pixel_format) {
+    case TexturePixelFormat::A8B8G8R8_SINT:
+    case TexturePixelFormat::A8B8G8R8_UINT:
+    case TexturePixelFormat::A2B10G10R10_UINT:
+    case TexturePixelFormat::R8_SINT:
+    case TexturePixelFormat::R8_UINT:
+    case TexturePixelFormat::R16G16B16A16_SINT:
+    case TexturePixelFormat::R16G16B16A16_UINT:
+    case TexturePixelFormat::R32G32B32A32_UINT:
+    case TexturePixelFormat::R32G32B32A32_SINT:
+    case TexturePixelFormat::R32G32_SINT:
+    case TexturePixelFormat::R16_UINT:
+    case TexturePixelFormat::R16_SINT:
+    case TexturePixelFormat::R16G16_UINT:
+    case TexturePixelFormat::R16G16_SINT:
+    case TexturePixelFormat::R8G8_SINT:
+    case TexturePixelFormat::R8G8_UINT:
+    case TexturePixelFormat::R32G32_UINT:
+    case TexturePixelFormat::R32_UINT:
+    case TexturePixelFormat::R32_SINT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool IsSampledPixelFormatSigned(TexturePixelFormat pixel_format) {
+    switch (pixel_format) {
+    case TexturePixelFormat::A8B8G8R8_SINT:
+    case TexturePixelFormat::R8_SINT:
+    case TexturePixelFormat::R16G16B16A16_SINT:
+    case TexturePixelFormat::R32G32B32A32_SINT:
+    case TexturePixelFormat::R32G32_SINT:
+    case TexturePixelFormat::R16_SINT:
+    case TexturePixelFormat::R16G16_SINT:
+    case TexturePixelFormat::R8G8_SINT:
+    case TexturePixelFormat::R32_SINT:
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool IsPixelFormatSNorm(TexturePixelFormat pixel_format) {
     switch (pixel_format) {
     case TexturePixelFormat::A8B8G8R8_SNORM:
@@ -797,6 +842,21 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
                 });
             } else {
                 count = std::min(count, sampled_dynamic_cap);
+                // EdEn.claude: integer textures need an integer SPIR-V sampled type. Depth
+                // compare and separate-sampler textures stay float. A cache without the pixel
+                // format of this handle falls back to the old float behaviour.
+                bool sampled_integer{};
+                bool sampled_signed{};
+                if (flags.is_depth == 0 && !cbuf.has_secondary) {
+                    try {
+                        const TexturePixelFormat pixel_format{
+                            ReadTexturePixelFormatCached(env, cbuf)};
+                        sampled_integer = IsSampledPixelFormatInteger(pixel_format);
+                        sampled_signed = IsSampledPixelFormatSigned(pixel_format);
+                    } catch (const std::exception&) {
+                        sampled_integer = false;
+                    }
+                }
                 index = descriptors.Add(TextureDescriptor{
                     .type = flags.type,
                     .is_depth = flags.is_depth != 0,
@@ -810,6 +870,8 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
                     .secondary_shift_left = cbuf.secondary_shift_left,
                     .count = count,
                     .size_shift = size_shift,
+                    .is_integer = sampled_integer,
+                    .is_signed = sampled_signed,
                 });
             }
             break;

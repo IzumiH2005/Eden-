@@ -367,6 +367,12 @@ public:
         return buffer_size;
     }
 
+    /// False when the host format of this view cannot be sampled with linear filtering
+    /// (e.g. D32_SFLOAT_S8_UINT, integer and some 32-bit float formats on Samsung Xclipse).
+    [[nodiscard]] bool SupportsLinearFilter() const noexcept {
+        return supports_linear_filter;
+    }
+
 private:
     struct StorageViews {
         std::array<vk::ImageView, Shader::NUM_TEXTURE_TYPES> signeds;
@@ -388,6 +394,7 @@ private:
     VkImageView render_target = VK_NULL_HANDLE;
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
     u32 buffer_size = 0;
+    bool supports_linear_filter = true;
 };
 
 class ImageAlloc : public VideoCommon::ImageAllocBase {};
@@ -408,9 +415,19 @@ public:
         return static_cast<bool>(sampler_default_anisotropy);
     }
 
+    /// Point-sampling variant, used with views whose format cannot be linearly filtered.
+    [[nodiscard]] VkSampler HandleNearest() const noexcept {
+        return *sampler_nearest;
+    }
+
+    [[nodiscard]] bool HasNearestFallback() const noexcept {
+        return static_cast<bool>(sampler_nearest);
+    }
+
 private:
     vk::Sampler sampler;
     vk::Sampler sampler_default_anisotropy;
+    vk::Sampler sampler_nearest;
 };
 
 struct TextureCacheParams {

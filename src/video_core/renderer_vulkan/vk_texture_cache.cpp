@@ -2129,6 +2129,12 @@ ImageView::ImageView(TextureCacheRuntime& runtime, const VideoCommon::ImageViewI
         }
     }
     const auto format_info = MaxwellToVK::SurfaceFormat(*device, FormatType::Optimal, true, format);
+    // EdEn.claude: remember whether the host format can be linearly filtered. Guest samplers
+    // are linear on formats the guest GPU filters but the host cannot (D24S8 emulated as
+    // D32_SFLOAT_S8_UINT, R16_UINT, R32_SFLOAT... on Samsung Xclipse); sampling those through
+    // a linear sampler is undefined and returns garbage there.
+    supports_linear_filter = device->IsFormatSupported(
+        format_info.format, VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT, FormatType::Optimal);
     const VkImageUsageFlags requested_view_usage = ImageUsageFlags(format_info, format);
     const VkImageUsageFlags image_usage = image.UsageFlags();
     const VkImageUsageFlags clamped_view_usage = requested_view_usage & image_usage;
@@ -2336,14 +2342,17 @@ Sampler::Sampler(TextureCacheRuntime& runtime, const Tegra::Texture::TSCEntry& t
     // Some games have samplers with garbage. Sanitize them here.
     const f32 max_anisotropy = std::clamp(tsc.MaxAnisotropy(), 1.0f, 16.0f);
 
-    const auto create_sampler = [&](const f32 anisotropy) {
+    const auto create_sampler = [&](const f32 anisotropy, bool force_nearest = false) {
         return device.GetLogical().CreateSampler(VkSamplerCreateInfo{
             .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
             .pNext = pnext,
             .flags = 0,
-            .magFilter = MaxwellToVK::Sampler::Filter(tsc.mag_filter),
-            .minFilter = MaxwellToVK::Sampler::Filter(tsc.min_filter),
-            .mipmapMode = MaxwellToVK::Sampler::MipmapMode(tsc.mipmap_filter),
+            .magFilter = force_nearest ? VK_FILTER_NEAREST
+                                       : MaxwellToVK::Sampler::Filter(tsc.mag_filter),
+            .minFilter = force_nearest ? VK_FILTER_NEAREST
+                                       : MaxwellToVK::Sampler::Filter(tsc.min_filter),
+            .mipmapMode = force_nearest ? VK_SAMPLER_MIPMAP_MODE_NEAREST
+                                        : MaxwellToVK::Sampler::MipmapMode(tsc.mipmap_filter),
             .addressModeU = MaxwellToVK::Sampler::WrapMode(device, tsc.wrap_u, tsc.mag_filter),
             .addressModeV = MaxwellToVK::Sampler::WrapMode(device, tsc.wrap_v, tsc.mag_filter),
             .addressModeW = MaxwellToVK::Sampler::WrapMode(device, tsc.wrap_p, tsc.mag_filter),
@@ -2365,6 +2374,16 @@ Sampler::Sampler(TextureCacheRuntime& runtime, const Tegra::Texture::TSCEntry& t
     const f32 max_anisotropy_default = static_cast<f32>(1U << tsc.max_anisotropy);
     if (max_anisotropy > max_anisotropy_default) {
         sampler_default_anisotropy = create_sampler(max_anisotropy_default);
+    }
+
+    // EdEn.claude: point-sampling twin for views that cannot be linearly filtered. Depth
+    // compare samplers are exempt: Vulkan allows linear (PCF) filtering on them regardless.
+    const bool uses_linear = MaxwellToVK::Sampler::Filter(tsc.mag_filter) == VK_FILTER_LINEAR ||
+                             MaxwellToVK::Sampler::Filter(tsc.min_filter) == VK_FILTER_LINEAR ||
+                             MaxwellToVK::Sampler::MipmapMode(tsc.mipmap_filter) ==
+                                 VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    if (uses_linear && !tsc.depth_compare_enabled) {
+        sampler_nearest = create_sampler(1.0f, true);
     }
 }
 

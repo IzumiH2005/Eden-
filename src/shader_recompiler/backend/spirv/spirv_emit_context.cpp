@@ -30,8 +30,9 @@ enum class Operation {
 
 Id ImageType(EmitContext& ctx, const TextureDescriptor& desc) {
     const spv::ImageFormat format{spv::ImageFormat::Unknown};
-    const Id type{ctx.F32[1]};
-    const bool depth{desc.is_depth};
+    // EdEn.claude: integer guest textures are declared with an integer sampled type.
+    const Id type{desc.is_integer ? (desc.is_signed ? ctx.S32[1] : ctx.U32[1]) : ctx.F32[1]};
+    const bool depth{desc.is_depth && !desc.is_integer};
     const bool ms{desc.is_multisample};
     switch (desc.type) {
     case TextureType::Color1D:
@@ -1375,6 +1376,8 @@ void EmitContext::DefineTextures(const Info& info, u32& binding, u32& scaling_in
             .image_type = image_type,
             .count = desc.count,
             .is_multisample = desc.is_multisample,
+            .is_integer = desc.is_integer,
+            .is_signed = desc.is_signed,
         });
         if (profile.supported_spirv >= 0x00010400) {
             interfaces.push_back(id);
