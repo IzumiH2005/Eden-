@@ -568,8 +568,16 @@ struct Values {
                                               Category::RendererHacks};
     // Decode ASTC textures with Eden's own GPU decoder instead of the Xclipse texture unit's
     // hardware ASTC decoder (Samsung driver and RADV ports both use it).
-    SwitchableSetting<bool> xclipse_soft_astc{linkage, true, "xclipse_soft_astc",
+    SwitchableSetting<bool> xclipse_soft_astc{linkage, false, "xclipse_soft_astc",
                                               Category::RendererHacks};
+    // EdEn.claude diagnostics: each one switches an Xclipse/AMD code path to what Eden does on
+    // Adreno, where the skin bug does not happen. Only applied on AMD-architecture GPUs.
+    SwitchableSetting<bool> diag_scaled_vertex{linkage, true, "diag_scaled_vertex", Category::RendererHacks};
+    SwitchableSetting<bool> diag_no_float_controls{linkage, true, "diag_no_float_controls", Category::RendererHacks};
+    SwitchableSetting<bool> diag_no_gather_offset{linkage, true, "diag_no_gather_offset", Category::RendererHacks};
+    SwitchableSetting<bool> diag_no_depth_clip_control{linkage, true, "diag_no_depth_clip_control", Category::RendererHacks};
+    SwitchableSetting<bool> diag_no_stencil_export{linkage, true, "diag_no_stencil_export", Category::RendererHacks};
+    SwitchableSetting<bool> diag_no_int64{linkage, true, "diag_no_int64", Category::RendererHacks};
 
     SwitchableSetting<bool> emulate_bgr565{linkage, false, "emulate_bgr565",
                                             Category::RendererHacks};

@@ -642,6 +642,37 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         is_optimal_astc_supported = false;
     }
 
+    // EdEn.claude diagnostics: switch Xclipse/AMD-only code paths to the Adreno ones.
+    if (IsAmdArchitecture()) {
+        if (Settings::values.diag_scaled_vertex.GetValue()) {
+            LOG_WARNING(Render_Vulkan, "Diag A: emulating scaled vertex formats");
+            must_emulate_scaled_formats = true;
+        }
+        if (Settings::values.diag_no_float_controls.GetValue() && extensions.shader_float_controls) {
+            LOG_WARNING(Render_Vulkan, "Diag B: shader float controls disabled");
+            RemoveExtension(extensions.shader_float_controls,
+                            VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME);
+        }
+        if (Settings::values.diag_no_depth_clip_control.GetValue() && extensions.depth_clip_control) {
+            LOG_WARNING(Render_Vulkan, "Diag D: depth clip control disabled");
+            RemoveExtensionFeature(extensions.depth_clip_control, features.depth_clip_control,
+                                   VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME);
+        }
+        if (Settings::values.diag_no_stencil_export.GetValue() && extensions.shader_stencil_export) {
+            LOG_WARNING(Render_Vulkan, "Diag E: shader stencil export disabled");
+            RemoveExtension(extensions.shader_stencil_export,
+                            VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
+        }
+        if (Settings::values.diag_no_int64.GetValue()) {
+            LOG_WARNING(Render_Vulkan, "Diag F: 64-bit integers disabled");
+            RemoveExtensionFeature(extensions.shader_atomic_int64, features.shader_atomic_int64,
+                                   VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME);
+            features.shader_atomic_int64.shaderBufferInt64Atomics = false;
+            features.shader_atomic_int64.shaderSharedInt64Atomics = false;
+            features.features.shaderInt64 = false;
+        }
+    }
+
     if (features.shader_float16_int8.shaderFloat16 && is_intel_windows) {
         // Intel's compiler crashes when using fp16 on Astral Chain, disable it for the time being.
         LOG_WARNING(Render_Vulkan, "Intel has broken float16 math");

@@ -14,6 +14,25 @@ Sur Xclipse, la peau des personnages devient **blanche avec un halo de bloom** o
 Un halo blanc correspond à une valeur infinie, une zone noire à un NaN. Ces valeurs naissent dans
 les shaders d'éclairage.
 
+## Diagnostic fix4 : chemins « Adreno » forcés
+
+Les tests fix1 à fix3 ont éliminé le FP16, les NaN, les conversions profondeur → couleur (jamais
+demandées par The Witcher 3) et le décodeur ASTC matériel. Le bug n'existe pas sur Snapdragon,
+donc la fix4 ajoute six options, **toutes activées par défaut**. Chacune fait prendre à Eden, sur
+Xclipse, le chemin qu'il prend sur Adreno :
+
+| Option | Effet |
+|---|---|
+| Diag A | formats de sommets USCALED/SSCALED émulés dans les shaders |
+| Diag B | `VK_KHR_shader_float_controls` retiré |
+| Diag C | pas de décalage sous-pixel AMD pour `textureGather` |
+| Diag D | `VK_EXT_depth_clip_control` retiré |
+| Diag E | `VK_EXT_shader_stencil_export` retiré |
+| Diag F | entiers 64 bits et leurs atomiques retirés |
+
+Si la peau est corrigée avec tout activé, désactiver une option à la fois pour trouver la coupable.
+« Décodage ASTC logiciel » est désormais désactivé par défaut (aucun effet constaté).
+
 ## Test fix3 : décodage ASTC logiciel sur Xclipse
 
 Sur Xclipse, la peau se corrompt **quand on s'approche** d'un personnage, c'est-à-dire quand les

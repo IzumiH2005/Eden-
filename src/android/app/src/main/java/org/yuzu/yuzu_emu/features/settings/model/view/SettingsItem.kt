@@ -787,6 +787,48 @@ abstract class SettingsItem(
             )
             put(
                 SwitchSetting(
+                    BooleanSetting.DIAG_SCALED_VERTEX,
+                    titleId = R.string.diag_scaled_vertex,
+                    descriptionId = R.string.diag_scaled_vertex_description
+                )
+            )
+            put(
+                SwitchSetting(
+                    BooleanSetting.DIAG_NO_FLOAT_CONTROLS,
+                    titleId = R.string.diag_no_float_controls,
+                    descriptionId = R.string.diag_no_float_controls_description
+                )
+            )
+            put(
+                SwitchSetting(
+                    BooleanSetting.DIAG_NO_GATHER_OFFSET,
+                    titleId = R.string.diag_no_gather_offset,
+                    descriptionId = R.string.diag_no_gather_offset_description
+                )
+            )
+            put(
+                SwitchSetting(
+                    BooleanSetting.DIAG_NO_DEPTH_CLIP_CONTROL,
+                    titleId = R.string.diag_no_depth_clip_control,
+                    descriptionId = R.string.diag_no_depth_clip_control_description
+                )
+            )
+            put(
+                SwitchSetting(
+                    BooleanSetting.DIAG_NO_STENCIL_EXPORT,
+                    titleId = R.string.diag_no_stencil_export,
+                    descriptionId = R.string.diag_no_stencil_export_description
+                )
+            )
+            put(
+                SwitchSetting(
+                    BooleanSetting.DIAG_NO_INT64,
+                    titleId = R.string.diag_no_int64,
+                    descriptionId = R.string.diag_no_int64_description
+                )
+            )
+            put(
+                SwitchSetting(
                     BooleanSetting.EMULATE_BGR565,
                     titleId = R.string.emulate_bgr565,
                     descriptionId = R.string.emulate_bgr565_description
