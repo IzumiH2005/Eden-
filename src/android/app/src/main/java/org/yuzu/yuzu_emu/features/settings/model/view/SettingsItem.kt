@@ -766,6 +766,20 @@ abstract class SettingsItem(
             )
             put(
                 SwitchSetting(
+                    BooleanSetting.AMD_FP32_SHADERS,
+                    titleId = R.string.amd_fp32_shaders,
+                    descriptionId = R.string.amd_fp32_shaders_description
+                )
+            )
+            put(
+                SwitchSetting(
+                    BooleanSetting.AMD_NAN_SAFE_MATH,
+                    titleId = R.string.amd_nan_safe_math,
+                    descriptionId = R.string.amd_nan_safe_math_description
+                )
+            )
+            put(
+                SwitchSetting(
                     BooleanSetting.EMULATE_BGR565,
                     titleId = R.string.emulate_bgr565,
                     descriptionId = R.string.emulate_bgr565_description

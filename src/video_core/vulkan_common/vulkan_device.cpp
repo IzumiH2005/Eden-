@@ -615,6 +615,20 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         }
     }
 
+    // EdEn.claude: the AMD float16 workaround above only matches AMD's own driver IDs. Samsung
+    // Xclipse GPUs are RDNA too (Samsung's AMD-derived driver, or RADV ports such as
+    // radv-xclipse) and show the same symptoms: characters' skin turning white (Inf, blown out
+    // by bloom) or very dark (NaN) in The Witcher 3 and NBA. Their drivers also expose only
+    // 32-bit-only denorm independence, so the guest's FP16 flush-to-zero cannot be honoured.
+    // Lowering FP16 to FP32 avoids both problems.
+    if (features.shader_float16_int8.shaderFloat16 && IsAmdArchitecture() &&
+        Settings::values.amd_fp32_shaders.GetValue()) {
+        LOG_WARNING(Render_Vulkan,
+                    "AMD-architecture GPU ({}): running guest FP16 shader math in FP32",
+                    properties.driver.driverName);
+        features.shader_float16_int8.shaderFloat16 = false;
+    }
+
     if (features.shader_float16_int8.shaderFloat16 && is_intel_windows) {
         // Intel's compiler crashes when using fp16 on Astral Chain, disable it for the time being.
         LOG_WARNING(Render_Vulkan, "Intel has broken float16 math");

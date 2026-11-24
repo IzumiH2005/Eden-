@@ -556,6 +556,17 @@ struct Values {
     SwitchableSetting<bool> fix_bloom_effects{linkage, false, "fix_bloom_effects",
                                                      Category::RendererHacks};
 
+    // EdEn.claude: AMD-architecture GPU fixes (Samsung Xclipse, RADV, AMD).
+    // Run guest half-precision (FP16) shader math in FP32 on AMD-architecture GPUs. Their FP16
+    // math overflows/NaNs where the Switch does not, and their drivers cannot apply the guest's
+    // FP16 denormal flush. Upstream already does this for AMD proprietary drivers only.
+    SwitchableSetting<bool> amd_fp32_shaders{linkage, true, "amd_fp32_shaders",
+                                             Category::RendererHacks};
+    // Emulate Maxwell min/max/saturate NaN semantics exactly (the non-NaN operand wins,
+    // saturate(NaN) == 0) instead of relying on undefined SPIR-V FMin/FMax/FClamp behaviour.
+    SwitchableSetting<bool> amd_nan_safe_math{linkage, true, "amd_nan_safe_math",
+                                              Category::RendererHacks};
+
     SwitchableSetting<bool> emulate_bgr565{linkage, false, "emulate_bgr565",
                                             Category::RendererHacks};
 

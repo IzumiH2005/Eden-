@@ -18,6 +18,11 @@ Id Decorate(EmitContext& ctx, IR::Inst* inst, Id op) {
 }
 
 Id Clamp(EmitContext& ctx, Id type, Id value, Id zero, Id one) {
+    if (ctx.profile.need_nan_safe_min_max) {
+        // Maxwell: a NaN input clamps to the lower bound (saturate(NaN) == 0).
+        // NMax returns the non-NaN operand, so NaN never reaches the output.
+        return ctx.OpNMin(type, ctx.OpNMax(type, value, zero), one);
+    }
     if (ctx.profile.has_broken_spirv_clamp) {
         return ctx.OpFMin(type, ctx.OpFMax(type, value, zero), one);
     } else {
@@ -85,18 +90,34 @@ Id EmitFPFma64(EmitContext& ctx, IR::Inst* inst, Id a, Id b, Id c) {
 }
 
 Id EmitFPMax32(EmitContext& ctx, Id a, Id b) {
+    if (ctx.profile.need_nan_safe_min_max) {
+        // Maxwell FMNMX returns the non-NaN operand, like GLSL.std.450 NMax.
+        return ctx.OpNMax(ctx.F32[1], a, b);
+    }
     return ctx.OpFMax(ctx.F32[1], a, b);
 }
 
 Id EmitFPMax64(EmitContext& ctx, Id a, Id b) {
+    if (ctx.profile.need_nan_safe_min_max) {
+        // Maxwell FMNMX returns the non-NaN operand, like GLSL.std.450 NMax.
+        return ctx.OpNMax(ctx.F64[1], a, b);
+    }
     return ctx.OpFMax(ctx.F64[1], a, b);
 }
 
 Id EmitFPMin32(EmitContext& ctx, Id a, Id b) {
+    if (ctx.profile.need_nan_safe_min_max) {
+        // Maxwell FMNMX returns the non-NaN operand, like GLSL.std.450 NMin.
+        return ctx.OpNMin(ctx.F32[1], a, b);
+    }
     return ctx.OpFMin(ctx.F32[1], a, b);
 }
 
 Id EmitFPMin64(EmitContext& ctx, Id a, Id b) {
+    if (ctx.profile.need_nan_safe_min_max) {
+        // Maxwell FMNMX returns the non-NaN operand, like GLSL.std.450 NMin.
+        return ctx.OpNMin(ctx.F64[1], a, b);
+    }
     return ctx.OpFMin(ctx.F64[1], a, b);
 }
 

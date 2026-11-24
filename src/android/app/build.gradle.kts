@@ -214,6 +214,19 @@ android {
             }
         }
 
+        // EdEn.claude: test build with the Xclipse/AMD rendering fixes. Own package id, so it
+        // installs next to the regular Eden builds instead of replacing them.
+        create("claude") {
+            dimension = "version"
+            manifestPlaceholders += mapOf("appNameBase" to "EdEn.claude")
+            resValue("string", "app_name_suffixed", "EdEn.claude")
+            applicationId = "dev.eden.eden_emulator.claude"
+
+            ndk {
+                abiFilters += listOf("arm64-v8a")
+            }
+        }
+
         create("legacy") {
             dimension = "version"
             manifestPlaceholders += mapOf("appNameBase" to "Eden Legacy")

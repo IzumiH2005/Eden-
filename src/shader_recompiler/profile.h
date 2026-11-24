@@ -65,6 +65,11 @@ struct Profile {
 
     /// OpFClamp is broken and OpFMax + OpFMin should be used instead
     bool has_broken_spirv_clamp{};
+    /// EdEn.claude: emit min/max/clamp/saturate with NaN-aware operations (GLSL.std.450 NMin/NMax)
+    /// so the host matches Maxwell: the non-NaN operand wins and saturate(NaN) returns 0.
+    /// FMin/FMax/FClamp leave the NaN case undefined, and AMD-architecture compilers can let the
+    /// NaN through, which turns shading black or, after bloom, white.
+    bool need_nan_safe_min_max{};
     /// The Position builtin needs to be wrapped in a struct when used as an input
     bool has_broken_spirv_position_input{};
     /// Offset image operands with an unsigned type do not work

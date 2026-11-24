@@ -514,6 +514,10 @@
     <string name="emulate_bgr565">Emulate BGR565</string>
     <string name="emulate_bgr565_description">Fixes problems with inverted colors in games or strange artifacts or strange shadows.</string>
     <string name="rescale_hack">Enable Legacy Rescale Pass</string>
+    <string name="amd_fp32_shaders">FP32 shaders on Xclipse/AMD</string>
+    <string name="amd_fp32_shaders_description">Runs half-precision (FP16) shader math in FP32 on Samsung Xclipse and AMD GPUs. Fixes characters\' skin turning white or very dark. Restart the game after changing.</string>
+    <string name="amd_nan_safe_math">NaN-safe math on Xclipse/AMD</string>
+    <string name="amd_nan_safe_math_description">Emulates the Switch GPU min/max/saturate behaviour with NaN values exactly on Samsung Xclipse and AMD GPUs, so invalid values cannot turn surfaces black or white. Restart the game after changing.</string>
     <string name="rescale_hack_description">Enables a legacy handling for the rescale configuration pass for games by using a quick rescale path</string>
     <string name="renderer_asynchronous_shaders">Use asynchronous shaders</string>
     <string name="renderer_asynchronous_shaders_description">Compiles shaders asynchronously. This may reduce stutters but may also introduce glitches.</string>

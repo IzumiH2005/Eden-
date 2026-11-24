@@ -912,6 +912,19 @@ public:
         return properties.driver.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY;
     }
 
+    /// Returns true for GPUs built on AMD's architecture: AMD itself (proprietary or RADV) and
+    /// Samsung Xclipse (RDNA based, with Samsung's AMD-derived driver or a RADV port).
+    bool IsAmdArchitecture() const noexcept {
+        constexpr u32 VENDOR_AMD = 0x1002;
+        constexpr u32 VENDOR_SAMSUNG = 0x144D;
+        const VkDriverId driver_id = properties.driver.driverID;
+        const u32 vendor_id = properties.properties.vendorID;
+        return driver_id == VK_DRIVER_ID_AMD_PROPRIETARY ||
+               driver_id == VK_DRIVER_ID_AMD_OPEN_SOURCE || driver_id == VK_DRIVER_ID_MESA_RADV ||
+               driver_id == VK_DRIVER_ID_SAMSUNG_PROPRIETARY || vendor_id == VENDOR_AMD ||
+               vendor_id == VENDOR_SAMSUNG;
+    }
+
     bool IsMoltenVK() const noexcept {
         return properties.driver.driverID == VK_DRIVER_ID_MOLTENVK;
     }

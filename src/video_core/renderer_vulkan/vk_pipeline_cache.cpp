@@ -426,10 +426,14 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
         .need_gather_subpixel_offset = driver_id == VK_DRIVER_ID_AMD_PROPRIETARY ||
                                        driver_id == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
                                        driver_id == VK_DRIVER_ID_MESA_RADV ||
+                                       // EdEn.claude: Xclipse samples like AMD hardware
+                                       driver_id == VK_DRIVER_ID_SAMSUNG_PROPRIETARY ||
                                        driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS ||
                                        driver_id == VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA,
 
         .has_broken_spirv_clamp = driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS,
+        .need_nan_safe_min_max =
+            device.IsAmdArchitecture() && Settings::values.amd_nan_safe_math.GetValue(),
         .has_broken_spirv_position_input = driver_id == false,
         .has_broken_unsigned_image_offsets = false,
         .has_broken_signed_operations = false,

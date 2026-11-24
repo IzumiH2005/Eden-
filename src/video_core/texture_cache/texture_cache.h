@@ -1153,8 +1153,11 @@ void TextureCache<P>::RefreshContents(Image& image, ImageId image_id) {
 
     const bool gpu_unswizzle_enabled = Settings::values.gpu_unswizzle_enabled.GetValue();
 
+    // EdEn.claude: the compute unswizzle copies raw BCn blocks into the image, which is wrong when
+    // the host lacks BCn and the image holds CPU-decoded (Converted) texels instead.
     if (gpu_unswizzle_enabled &&
         IsPixelFormatBCn(image.info.format) &&
+        False(image.flags & ImageFlagBits::Converted) &&
         image.info.type == ImageType::e3D &&
         image.info.resources.levels == 1 &&
         image.info.resources.layers == 1 &&
