@@ -1,0 +1,112 @@
+From fa13b469488c72447ebf51002f874854db32e6c9 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 26 Nov 2026 22:46:57 +0000
+Subject: [PATCH] radv/xclipse: opt-in RDNA3 ISA features (VOPD, s_delay_alu,
+ v_permlane64)
+
+radv_shader.c turns dual-issue VALU (VOPD), s_delay_alu hints and
+v_permlane64_b32 off on every Xclipse GFX11 ISA. They were calibrated on
+the Xclipse 920; the 540 and 940 are marketed as RDNA3, where they are core
+features. Without v_permlane64, every wave64 shuffle with a dynamic index
+becomes one v_readlane per lane.
+
+Add debug.radv_xclipse_vopd, debug.radv_xclipse_delay_alu and
+debug.radv_xclipse_permlane64 (or RADV_XCLIPSE_VOPD / _DELAY_ALU /
+_PERMLANE64), off by default. They live in compiler_info.hw, which is
+hashed into the shader cache key, so toggling one rebuilds shaders.
+---
+ src/amd/vulkan/radv_device.c | 26 ++++++++++++++++++++++++++
+ src/amd/vulkan/radv_shader.c |  7 ++++---
+ src/amd/vulkan/radv_shader.h |  7 ++++++-
+ 3 files changed, 36 insertions(+), 4 deletions(-)
+
+diff --git a/src/amd/vulkan/radv_device.c b/src/amd/vulkan/radv_device.c
+index a97d0fc..01dd9ea 100644
+--- a/src/amd/vulkan/radv_device.c
++++ b/src/amd/vulkan/radv_device.c
+@@ -8,6 +8,9 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#ifdef __ANDROID__
++#include <sys/system_properties.h>
++#endif
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <stdbool.h>
+@@ -1155,6 +1158,24 @@ radv_device_is_cache_disabled(const struct radv_device *device)
+    return false;
+ }
+ 
++/* Nova: opt-in RDNA3 ISA features for Xclipse shader cores. The ISA flags in radv_shader.c were
++ * calibrated on the Xclipse 920; the 540 and 940 are marketed as RDNA3 and may have them. Off by
++ * default; RADV_XCLIPSE_<NAME>=1 or setprop debug.radv_xclipse_<name> 1 turns one on. They are part
++ * of compiler_info.hw, so the shader cache key changes with them. */
++static bool
++radv_xclipse_isa_opt(const char *env_name, const char *prop_name)
++{
++   const char *e = getenv(env_name);
++   if (e && e[0])
++      return atoi(e) != 0;
++#ifdef __ANDROID__
++   char p[PROP_VALUE_MAX] = {0};
++   if (__system_property_get(prop_name, p) > 0 && p[0])
++      return atoi(p) != 0;
++#endif
++   return false;
++}
++
+ static void
+ radv_device_init_compiler_info(struct radv_device *device)
+ {
+@@ -1242,6 +1263,11 @@ radv_device_init_compiler_info(struct radv_device *device)
+             .address_prt_wa_control_bit = pdev->info.address_prt_wa_control_bit,
+             .rbplus_allowed = pdev->info.rbplus_allowed,
+             .gfx11_isa = gfx11_isa,
++            .xclipse_vopd = gfx11_isa && radv_xclipse_isa_opt("RADV_XCLIPSE_VOPD", "debug.radv_xclipse_vopd"),
++            .xclipse_delay_alu =
++               gfx11_isa && radv_xclipse_isa_opt("RADV_XCLIPSE_DELAY_ALU", "debug.radv_xclipse_delay_alu"),
++            .xclipse_permlane64 =
++               gfx11_isa && radv_xclipse_isa_opt("RADV_XCLIPSE_PERMLANE64", "debug.radv_xclipse_permlane64"),
+             .hw_scratch_base = pdev->info.family == CHIP_TITAN,
+             .gfx11_ngg = radv_use_gfx11_streamout(pdev),
+          },
+diff --git a/src/amd/vulkan/radv_shader.c b/src/amd/vulkan/radv_shader.c
+index 097542e..ef370e1 100644
+--- a/src/amd/vulkan/radv_shader.c
++++ b/src/amd/vulkan/radv_shader.c
+@@ -3655,9 +3655,10 @@ radv_aco_fill_compiler_options(struct aco_compiler_options *aco_info, const stru
+     * features (dual-issue VALU) stay off. */
+    if (compiler_info->hw.gfx11_isa)
+       aco_info->gfx_level = GFX11;
+-   aco_info->has_vopd = aco_info->gfx_level >= GFX11 && !compiler_info->hw.gfx11_isa;
+-   aco_info->no_delay_alu = compiler_info->hw.gfx11_isa;
+-   aco_info->no_permlane64 = compiler_info->hw.gfx11_isa;
++   aco_info->has_vopd =
++      aco_info->gfx_level >= GFX11 && (!compiler_info->hw.gfx11_isa || compiler_info->hw.xclipse_vopd);
++   aco_info->no_delay_alu = compiler_info->hw.gfx11_isa && !compiler_info->hw.xclipse_delay_alu;
++   aco_info->no_permlane64 = compiler_info->hw.gfx11_isa && !compiler_info->hw.xclipse_permlane64;
+    aco_info->ldsdir_valu_drain = compiler_info->hw.gfx11_isa;
+    aco_info->gfx10_global_offsets = compiler_info->hw.gfx11_isa;
+    aco_info->swizzle_no_idxen = compiler_info->hw.gfx11_isa;
+diff --git a/src/amd/vulkan/radv_shader.h b/src/amd/vulkan/radv_shader.h
+index 02f2fb0..fa3b0e2 100644
+--- a/src/amd/vulkan/radv_shader.h
++++ b/src/amd/vulkan/radv_shader.h
+@@ -563,7 +563,12 @@ struct radv_compiler_info {
+       /* GFX11 NGG geometry (TITAN: Xclipse 530 and 940): NGG for every pre-rasterization stage,
+        * streamout included (the GFX11 GS-register scheme), since the legacy path draws nothing. */
+       uint32_t gfx11_ngg : 1;
+-      uint32_t padding : 12;
++      /* Nova, opt-in (radv_xclipse_isa_opt): RDNA3 dual-issue VALU (VOPD), s_delay_alu hints and
++       * v_permlane64_b32 on an Xclipse GFX11 ISA. Off = the 920-calibrated behaviour. */
++      uint32_t xclipse_vopd : 1;
++      uint32_t xclipse_delay_alu : 1;
++      uint32_t xclipse_permlane64 : 1;
++      uint32_t padding : 9;
+    } hw;
+ 
+    /* Misc values included as part of the cache key */
+-- 
+2.43.0
+

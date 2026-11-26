@@ -9,7 +9,8 @@ Build de [radv-xclipse](https://github.com/JimVulkan/radv-xclipse) **v1.9.0** (J
 
 ## Ce qui change par rapport à radv-xclipse
 
-Le code du pilote est **identique** à la v1.9.0. Seule la compilation change :
+Le code du pilote est celui de la v1.9.0, plus trois options RDNA3 désactivées par défaut (voir
+plus bas). La compilation change ainsi :
 
 | | radv-xclipse | Nova |
 |---|---|---|
@@ -22,6 +23,51 @@ couvre l'enregistrement des commandes, les descripteurs et surtout la **compilat
 par ACO**, donc moins de saccades à la première rencontre d'un shader. Le gain attendu est
 **faible** : quelques pourcents du temps passé dans le pilote, souvent moins. Le travail du GPU
 lui-même n'est pas plus rapide. **Non mesuré sur un vrai Xclipse** : à comparer soi-même.
+
+## Particularités du Xclipse 540 encore inexploitées
+
+Le Xclipse est un hybride : processeur de commandes et registres GFX10.3 (RDNA2), cœur de
+shaders GFX11 (RDNA3). radv-xclipse compile bien les shaders en jeu d'instructions GFX11, mais
+désactive sur **tous** les Xclipse trois fonctions RDNA3 (`radv_shader.c`) : « Only the ISA is
+GFX11 […] RDNA3-only hardware features (dual-issue VALU) stay off ». Elles ont été mises au point
+sur le Xclipse 920, qui ne les a pas. Le 540 et le 940 sont décrits comme RDNA3.
+
+| Fonction RDNA3 | Désactivée car | Effet si le 540 l'a |
+|---|---|---|
+| **VOPD** (dual-issue VALU) | calibré sur le 920 | jusqu'à 2 opérations de calcul par cycle dans les shaders en wave32 |
+| **`v_permlane64_b32`** | « on the 920 the other half reads back 0 » | en wave64, chaque shuffle à index variable cesse d'être **une lecture par thread (jusqu'à 64 instructions)** |
+| **`s_delay_alu`** | calibré sur le 920 | indications d'ordonnancement, moins d'attentes |
+
+Nova ajoute une propriété par fonction, **désactivée par défaut**. Les trois sont incluses dans
+la clé du cache de shaders : changer un réglage recompile les shaders.
+
+### Le wave32, déjà disponible
+
+radv-xclipse exécute tous les shaders en **wave64** par défaut. Or en wave64 sur Xclipse, les
+shuffles de sous-groupe (utilisés par Eden pour l'instruction `SHFL` de la Switch, et par les
+shaders de Peanuts Native) passent par le chemin lent « one readlane per lane ». En **wave32**,
+un shuffle est une seule instruction (`ds_bpermute_b32`), et c'est aussi le mode où VOPD agit.
+Le wave32 est une option standard de RADV, réglable sans modifier le pilote.
+
+### Protocole de test (ADB, sans root)
+
+Toujours dans la même scène, en relançant l'application après chaque commande, et en notant les
+FPS à chaque étape :
+
+```
+# 1. wave32 pour tous les étages (option RADV standard, la moins risquée)
+adb shell setprop debug.mesa.radv.perftest cswave32,pswave32,gewave32
+# 2. v_permlane64 (shuffles wave64 rapides)
+adb shell setprop debug.radv_xclipse_permlane64 1
+# 3. indications s_delay_alu
+adb shell setprop debug.radv_xclipse_delay_alu 1
+# 4. dual-issue VOPD (agit en wave32, donc avec l'étape 1)
+adb shell setprop debug.radv_xclipse_vopd 1
+```
+
+Si une étape donne une image cassée, un plantage ou un blocage, cette fonction n'existe pas (ou
+pas sous cette forme) sur le 540 : l'annuler avec `adb shell setprop <propriété> ""`. Ces
+propriétés `debug.*` disparaissent aussi au redémarrage du téléphone.
 
 ## Analyse faite
 
