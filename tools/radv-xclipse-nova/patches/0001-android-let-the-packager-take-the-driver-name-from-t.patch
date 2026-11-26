@@ -1,0 +1,41 @@
+From e9fca13d381f017688a2f3120d3af5381efa43c8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 26 Nov 2026 22:33:02 +0000
+Subject: [PATCH] android: let the packager take the driver name from the
+ environment
+
+---
+ android/package.py | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/android/package.py b/android/package.py
+index 0efd32f..9ec29dd 100755
+--- a/android/package.py
++++ b/android/package.py
+@@ -66,9 +66,10 @@ def main():
+ 
+     meta = {
+         'schemaVersion': 1,
+-        'name': 'RADV Xclipse (Mesa %s%s)' % (mesa_version, suffix),
+-        'description': 'RADV for Samsung Xclipse GPUs, based on Mesa %s.' % mesa_version,
+-        'author': 'JimVulkan',
++        'name': os.environ.get('NOVA_NAME', 'RADV Xclipse (Mesa %s%s)' % (mesa_version, suffix)),
++        'description': os.environ.get('NOVA_DESCRIPTION',
++                                      'RADV for Samsung Xclipse GPUs, based on Mesa %s.' % mesa_version),
++        'author': os.environ.get('NOVA_AUTHOR', 'JimVulkan'),
+         'packageVersion': count,
+         'vendor': 'Mesa',
+         'driverVersion': vulkan,
+@@ -77,7 +78,8 @@ def main():
+     }
+ 
+     os.makedirs(out_dir, exist_ok=True)
+-    zip_path = os.path.join(out_dir, 'radv-xclipse-%s%s.zip' % (mesa_version, suffix))
++    zip_path = os.path.join(out_dir, '%s-%s%s.zip' % (os.environ.get('NOVA_ZIP_PREFIX', 'radv-xclipse'),
++                                                      mesa_version, suffix))
+     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
+         z.writestr('meta.json', json.dumps(meta, indent=2) + '\n')
+         z.write(lib, 'vulkan.radeon.so')
+-- 
+2.43.0
+
