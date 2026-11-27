@@ -2,7 +2,9 @@
 # RADV Xclipse Nova: radv-xclipse v1.9.0 (JimVulkan, Mesa 27.0.0-devel) built for the
 # Samsung Exynos 1580 (Galaxy A56, Xclipse 540): Cortex-A720 + Cortex-A520 (Armv9.2-A).
 #
-# Differences from radv-xclipse's own build.sh, all build-side (the driver code is unchanged):
+# Driver changes (patches/, all off by default): opt-in RDNA3 ISA features and the
+# debug.radv_xclipse_nova profile (wave32, WGP always-on). Build differences from radv-xclipse's
+# own build.sh:
 #   - buildtype release (-O3) instead of debugoptimized (-O2 -g)
 #   - no LTO: Mesa refuses it (meson.build: "Building Mesa with LTO is not supported")
 #   - -mcpu=cortex-a720 instead of the generic -march=armv8.2-a: Armv9.2 instructions and
@@ -59,7 +61,7 @@ ninja -C "$BUILD" src/amd/vulkan/libvulkan_radeon.so
 
 MESA="$(cat "$SRC/VERSION")"
 NOVA_NAME="RADV Xclipse Nova (Mesa $MESA, Exynos 1580)" \
-NOVA_DESCRIPTION="radv-xclipse v1.9.0 built for the Exynos 1580 / Xclipse 540 (Galaxy A56): -O3, Cortex-A720." \
+NOVA_DESCRIPTION="radv-xclipse v1.9.0 for the Exynos 1580 / Xclipse 540 (Galaxy A56): -O3, Cortex-A720, opt-in Nova profile (debug.radv_xclipse_nova)." \
 NOVA_AUTHOR="JimVulkan (radv-xclipse), EdEn.claude (Nova build)" \
 NOVA_ZIP_PREFIX="radv-xclipse-nova-a56" \
 python3 "$SRC/android/package.py" "$BUILD/vulkan.radeon.so" "$HERE/dist"

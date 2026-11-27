@@ -1,0 +1,207 @@
+From 271beb0692d505ba9f64fbbd55a2405ed2a8c3d4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 27 Nov 2026 10:57:43 +0000
+Subject: [PATCH] radv/xclipse: Nova performance profile (wave32, WGP
+ always-on, RDNA3 ISA)
+
+debug.radv_xclipse_nova (RADV_XCLIPSE_NOVA), default 0 = unchanged:
+
+1: wave32 for compute, pixel and geometry shaders. The Xclipse 540's
+   devicetree gives GC__SQ_WAVE_SIZE 32, and in wave64 every subgroup shuffle
+   with a dynamic index takes the one-readlane-per-lane path. Also keep every
+   WGP powered while a VkDevice exists: sgpu power-gates each idle WGP
+   (RLC_PG_CNTL.STATIC_PER_WGP_PG_ENABLE, always-on mask 0) and its private
+   AMDGPU_WGP_GATING ioctl (DRM_COMMAND_BASE + 0x5e) sets the always-on count.
+   Restored to 0 when the device is destroyed. debug.radv_xclipse_wgp_aon
+   enables it alone.
+2: level 1 plus VOPD, s_delay_alu and v_permlane64.
+---
+ src/amd/vulkan/radv_device.c          | 58 +++++++++++++++++++++++++--
+ src/amd/vulkan/radv_device.h          |  3 ++
+ src/amd/vulkan/radv_physical_device.c | 37 +++++++++++++++++
+ src/amd/vulkan/radv_physical_device.h |  3 ++
+ 4 files changed, 98 insertions(+), 3 deletions(-)
+
+diff --git a/src/amd/vulkan/radv_device.c b/src/amd/vulkan/radv_device.c
+index 01dd9ea..3a413f9 100644
+--- a/src/amd/vulkan/radv_device.c
++++ b/src/amd/vulkan/radv_device.c
+@@ -11,6 +11,8 @@
+ #ifdef __ANDROID__
+ #include <sys/system_properties.h>
+ #endif
++#include <sys/ioctl.h>
++#include "drm-uapi/drm.h"
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <stdbool.h>
+@@ -1158,6 +1160,43 @@ radv_device_is_cache_disabled(const struct radv_device *device)
+    return false;
+ }
+ 
++/* Nova: keep every WGP powered while the device exists. sgpu (Samsung's amdgpu fork) power-gates
++ * each idle WGP on its own (RLC_PG_CNTL.STATIC_PER_WGP_PG_ENABLE, always-on mask 0 by default) and
++ * powers it back up when work arrives. Its private ioctl AMDGPU_WGP_GATING (DRM_COMMAND_BASE +
++ * 0x5e, sgpu_drm.h) sets the always-on WGP count. Global to the GPU, so it is restored to 0 (the
++ * kernel default) when the device is destroyed. Enabled by debug.radv_xclipse_nova >= 1 or
++ * debug.radv_xclipse_wgp_aon 1 (RADV_XCLIPSE_WGP_AON=1). */
++#define XCLIPSE_WGP_GATING_OP_AON 2
++struct xclipse_wgp_gating_in {
++   uint32_t op;
++   uint32_t flags;
++   uint32_t value;
++};
++union xclipse_wgp_gating {
++   struct xclipse_wgp_gating_in in;
++   struct {
++      uint32_t number;
++      uint32_t bitmap[4][4];
++   } out;
++};
++#define XCLIPSE_IOCTL_WGP_GATING DRM_IOWR(DRM_COMMAND_BASE + 0x5e, union xclipse_wgp_gating)
++
++static bool
++radv_xclipse_set_wgp_aon(struct radv_device *device, uint32_t count)
++{
++   union xclipse_wgp_gating arg;
++   memset(&arg, 0, sizeof(arg));
++   arg.in.op = XCLIPSE_WGP_GATING_OP_AON;
++   arg.in.value = count;
++   const int fd = device->ws->get_fd(device->ws);
++   if (fd < 0)
++      return false;
++   const int ret = ioctl(fd, XCLIPSE_IOCTL_WGP_GATING, &arg);
++   mesa_logi("radv/xclipse nova: WGP always-on %u -> %s (%d)", count, ret == 0 ? "ok" : "refused",
++             ret == 0 ? 0 : errno);
++   return ret == 0;
++}
++
+ /* Nova: opt-in RDNA3 ISA features for Xclipse shader cores. The ISA flags in radv_shader.c were
+  * calibrated on the Xclipse 920; the 540 and 940 are marketed as RDNA3 and may have them. Off by
+  * default; RADV_XCLIPSE_<NAME>=1 or setprop debug.radv_xclipse_<name> 1 turns one on. They are part
+@@ -1263,11 +1302,14 @@ radv_device_init_compiler_info(struct radv_device *device)
+             .address_prt_wa_control_bit = pdev->info.address_prt_wa_control_bit,
+             .rbplus_allowed = pdev->info.rbplus_allowed,
+             .gfx11_isa = gfx11_isa,
+-            .xclipse_vopd = gfx11_isa && radv_xclipse_isa_opt("RADV_XCLIPSE_VOPD", "debug.radv_xclipse_vopd"),
++            .xclipse_vopd = gfx11_isa && (radv_xclipse_nova_level() >= 2 ||
++                                          radv_xclipse_isa_opt("RADV_XCLIPSE_VOPD", "debug.radv_xclipse_vopd")),
+             .xclipse_delay_alu =
+-               gfx11_isa && radv_xclipse_isa_opt("RADV_XCLIPSE_DELAY_ALU", "debug.radv_xclipse_delay_alu"),
++               gfx11_isa && (radv_xclipse_nova_level() >= 2 ||
++                             radv_xclipse_isa_opt("RADV_XCLIPSE_DELAY_ALU", "debug.radv_xclipse_delay_alu")),
+             .xclipse_permlane64 =
+-               gfx11_isa && radv_xclipse_isa_opt("RADV_XCLIPSE_PERMLANE64", "debug.radv_xclipse_permlane64"),
++               gfx11_isa && (radv_xclipse_nova_level() >= 2 ||
++                             radv_xclipse_isa_opt("RADV_XCLIPSE_PERMLANE64", "debug.radv_xclipse_permlane64")),
+             .hw_scratch_base = pdev->info.family == CHIP_TITAN,
+             .gfx11_ngg = radv_use_gfx11_streamout(pdev),
+          },
+@@ -1805,6 +1847,13 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
+ 
+    radv_xprof_device_init(device);
+ 
++   if (pdev->info.gfx11_shader_core &&
++       (radv_xclipse_nova_level() >= 1 ||
++        radv_xclipse_isa_opt("RADV_XCLIPSE_WGP_AON", "debug.radv_xclipse_wgp_aon"))) {
++      const uint32_t wgps = MAX2(pdev->info.num_cu / 2, 1);
++      device->xclipse_wgp_aon = radv_xclipse_set_wgp_aon(device, wgps);
++   }
++
+    *pDevice = radv_device_to_handle(device);
+    return VK_SUCCESS;
+ 
+@@ -1821,6 +1870,9 @@ radv_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
+    if (!device)
+       return;
+ 
++   if (device->xclipse_wgp_aon)
++      radv_xclipse_set_wgp_aon(device, 0);
++
+    radv_destroy_device(device, pAllocator);
+ }
+ 
+diff --git a/src/amd/vulkan/radv_device.h b/src/amd/vulkan/radv_device.h
+index 57d3774..5c65e62 100644
+--- a/src/amd/vulkan/radv_device.h
++++ b/src/amd/vulkan/radv_device.h
+@@ -170,6 +170,9 @@ struct radv_device {
+    /* Xclipse task/mesh emulation rings (radv_xclipse_task_bo). */
+    struct radeon_winsys_bo *xclipse_task_bo;
+ 
++   /* Nova: this device set sgpu's WGP always-on mask and restores it when destroyed. */
++   bool xclipse_wgp_aon;
++
+    /* MSAA sample locations.
+     * The first index is the sample index.
+     * The second index is the coordinate: X, Y. */
+diff --git a/src/amd/vulkan/radv_physical_device.c b/src/amd/vulkan/radv_physical_device.c
+index 9c7e769..27c2346 100644
+--- a/src/amd/vulkan/radv_physical_device.c
++++ b/src/amd/vulkan/radv_physical_device.c
+@@ -85,6 +85,34 @@ radv_xclipse_flag(const char *env, const char *prop)
+    return false;
+ }
+ 
++/* Nova performance profile (RADV_XCLIPSE_NOVA / debug.radv_xclipse_nova), read once:
++ *   0 (default) radv-xclipse's own behaviour
++ *   1 wave32 for compute, pixel and geometry shaders, and every WGP kept powered while a
++ *     VkDevice exists (sgpu's AMDGPU_WGP_GATING always-on mask)
++ *   2 level 1 plus the RDNA3 ISA features calibrated off on the 920 (VOPD, s_delay_alu,
++ *     v_permlane64), see radv_device_init_compiler_info(). */
++int
++radv_xclipse_nova_level(void)
++{
++   static int level = -1;
++   if (level < 0) {
++      int v = 0;
++      const char *e = getenv("RADV_XCLIPSE_NOVA");
++      if (e && e[0]) {
++         v = atoi(e);
++      }
++#if DETECT_OS_ANDROID
++      else {
++         char val[PROP_VALUE_MAX] = {0};
++         if (__system_property_get("debug.radv_xclipse_nova", val) > 0 && val[0])
++            v = atoi(val);
++      }
++#endif
++      level = v < 0 ? 0 : v;
++   }
++   return level;
++}
++
+ /* For default-on Xclipse features: true only if the env var or debug.<prop> is set to "0". */
+ static bool
+ radv_xclipse_flag_off(const char *env, const char *prop)
+@@ -3230,6 +3258,15 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
+       if (instance->perftest_flags & RADV_PERFTEST_GE_WAVE_32)
+          pdev->ge_wave_size = 32;
+ 
++      /* Nova level 1+: the Xclipse's native wave size is 32 (GC__SQ_WAVE_SIZE in the vendor
++       * devicetree), and in wave64 every subgroup shuffle with a dynamic index takes the
++       * one-readlane-per-lane path (no v_permlane64 by default). */
++      if (pdev->info.gfx11_shader_core && radv_xclipse_nova_level() >= 1) {
++         pdev->cs_wave_size = 32;
++         pdev->ps_wave_size = 32;
++         pdev->ge_wave_size = 32;
++      }
++
+       /* Default to 32 on RDNA as that gives better perf due to less issues with divergence.
+        * On GFX12+, wave32 will also be required for a future dynamic VGPR allocation implementation.
+        */
+diff --git a/src/amd/vulkan/radv_physical_device.h b/src/amd/vulkan/radv_physical_device.h
+index dec5d73..31d7934 100644
+--- a/src/amd/vulkan/radv_physical_device.h
++++ b/src/amd/vulkan/radv_physical_device.h
+@@ -352,4 +352,7 @@ radv_use_gfx11_streamout(const struct radv_physical_device *pdev)
+    return pdev->info.gfx_level >= GFX11 || pdev->info.family == CHIP_TITAN;
+ }
+ 
++/* Nova performance profile level, see radv_physical_device.c. */
++int radv_xclipse_nova_level(void);
++
+ #endif /* RADV_PHYSICAL_DEVICE_H */
+-- 
+2.43.0
+

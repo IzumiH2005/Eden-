@@ -7,67 +7,128 @@ Build de [radv-xclipse](https://github.com/JimVulkan/radv-xclipse) **v1.9.0** (J
 > Ne fonctionne que sur un processeur Armv9.2 comme celui de l'Exynos 1580. Pour tout autre
 > téléphone, utiliser le build d'origine de radv-xclipse.
 
-## Ce qui change par rapport à radv-xclipse
+Sans réglage, Nova se comporte exactement comme radv-xclipse v1.9.0, compilé plus agressivement.
+Le **profil Nova** (`debug.radv_xclipse_nova`) active les fonctions du Xclipse 540 que
+radv-xclipse laisse de côté.
 
-Le code du pilote est celui de la v1.9.0, plus trois options RDNA3 désactivées par défaut (voir
-plus bas). La compilation change ainsi :
+## 1. Mesurer d'abord : qui limite les FPS ?
+
+Un pilote ne peut accélérer que le travail du GPU. Si l'émulateur attend le **processeur**
+(recompilation ARM, émulation du CPU de la Switch, audio), un pilote plus rapide ne donne
+**aucune** image de plus. radv-xclipse contient déjà un instrument qui tranche :
+
+```
+adb shell setprop debug.radv_xclipse_perf 1
+# relancer le jeu, se placer dans la scène lente, puis :
+adb logcat -s RADV_PERF
+```
+
+Toutes les 2 secondes, une ligne `[PERF] … fps=… | LIMITER=…` :
+
+| `LIMITER=` | Signification | Ce que Nova peut faire |
+|---|---|---|
+| `GPU/US` | le jeu attend le GPU plus de la moitié du temps | **c'est le cas où Nova peut aider** |
+| `MIXED` | attente GPU entre 20 et 50 % | gain possible, mais partiel |
+| `APP CPU` | le GPU attend l'émulateur | rien : il faut alléger le CPU (réglages d'Eden, résolution n'y change rien) |
+| `SHADER COMPILE` | compilation de shaders | saccades, pas un manque de puissance : elles disparaissent une fois le cache rempli |
+
+Pour couper la mesure : `adb shell setprop debug.radv_xclipse_perf ""`. Elle ne modifie pas
+le cache de shaders.
+
+## 2. Le profil Nova
+
+| Commande | Effet |
+|---|---|
+| `adb shell setprop debug.radv_xclipse_nova 1` | **wave32** partout + **WGP toujours allumés** |
+| `adb shell setprop debug.radv_xclipse_nova 2` | niveau 1 + fonctions RDNA3 (**VOPD**, `v_permlane64`, `s_delay_alu`) |
+| `adb shell setprop debug.radv_xclipse_nova ""` | retour au comportement d'origine |
+
+Relancer l'application après chaque changement. Les propriétés `debug.*` disparaissent au
+redémarrage du téléphone. Chaque réglage `debug.radv*` fait partie de la clé du cache de
+shaders : le premier lancement après un changement recompile les shaders (saccades le temps
+que le cache se remplisse), puis tout redevient fluide.
+
+### Niveau 1 : wave32
+
+Le devicetree de l'Exynos 1580 déclare `gc-wave-front-size = 32` : la taille de vague native
+du Xclipse 540 est 32. radv-xclipse exécute pourtant tous les shaders en **wave64** (défaut
+RADV), ce qui a deux coûts sur ce GPU :
+
+- en wave64, radv-xclipse désactive `v_permlane64` sur tous les Xclipse. Chaque *shuffle* de
+  sous-groupe à index variable devient alors « one readlane per lane » : **jusqu'à 64
+  instructions au lieu d'une**. Eden en génère pour l'instruction `SHFL` de la Switch, et les
+  shaders de Peanuts Native en utilisent aussi ;
+- les petits dessins (peu de pixels, peu de sommets) occupent mal une vague de 64.
+
+En wave32, un shuffle est une seule instruction `ds_bpermute_b32`. Le niveau 1 équivaut aux
+options RADV standard `cswave32,pswave32,gewave32`, déjà testées en amont sur RDNA.
+
+### Niveau 1 : WGP toujours allumés
+
+Le Xclipse 540 n'a que **2 WGP** (4 CU). Le noyau Samsung (`sgpu`) les met hors tension dès
+qu'ils sont inactifs (`RLC_PG_CNTL.STATIC_PER_WGP_PG_ENABLE`, masque « toujours allumé » à 0),
+et les rallume au travail suivant, ce qui coûte un délai à chaque reprise. Le noyau expose un
+ioctl privé (`AMDGPU_WGP_GATING`, `DRM_COMMAND_BASE + 0x5e`) qui fixe le nombre de WGP toujours
+alimentés. Nova le règle à 2 tant que le jeu tourne, et le remet à 0 à la fermeture.
+
+Le journal (`adb logcat | grep "WGP always-on"`) indique si le noyau a accepté :
+`radv/xclipse nova: WGP always-on 2 -> ok (0)`. Avec `refused`, le noyau du téléphone refuse et
+seul le wave32 s'applique. Coût : un peu plus de consommation au repos pendant le jeu. Réglable
+seul avec `debug.radv_xclipse_wgp_aon 1`.
+
+### Niveau 2 : fonctions RDNA3
+
+radv-xclipse compile en jeu d'instructions GFX11 (RDNA3) mais désactive sur **tous** les
+Xclipse trois fonctions mises au point sur le Xclipse 920 (RDNA2), qui ne les a pas :
+
+| Fonction | Effet si le 540 l'a |
+|---|---|
+| **VOPD** (dual-issue VALU) | jusqu'à 2 opérations de calcul par cycle, en wave32 seulement (d'où le niveau 1 inclus) |
+| **`v_permlane64_b32`** | shuffles rapides en wave64 (ceux qui restent, par exemple dans les shaders internes) |
+| **`s_delay_alu`** | indications d'ordonnancement, moins d'attentes entre instructions dépendantes |
+
+Personne n'a vérifié que le 540 les exécute correctement. Si le niveau 2 donne une image
+cassée, un plantage ou un blocage, revenir au niveau 1. Chaque fonction reste réglable seule :
+`debug.radv_xclipse_vopd`, `debug.radv_xclipse_permlane64`, `debug.radv_xclipse_delay_alu`.
+
+## 3. Protocole de test
+
+Toujours **dans la même scène**, cache de shaders déjà rempli (jouer une minute avant de
+noter), en relevant `fps=` et `LIMITER=` du journal `RADV_PERF` :
+
+1. référence : `setprop debug.radv_xclipse_nova ""` ;
+2. `setprop debug.radv_xclipse_nova 1` ;
+3. `setprop debug.radv_xclipse_nova 2`.
+
+Garder le niveau qui donne le plus de FPS sans défaut d'image. Faire les mesures téléphone
+froid : après quelques minutes de jeu, la limitation thermique (ci-dessous) fausse la
+comparaison.
+
+## 4. Ce qu'un pilote ne peut pas changer
+
+L'analyse du noyau Samsung de l'Exynos 1580 (`drivers/gpu/drm/sgpu`, `s5e8855-sgpu.dtsi`) montre
+que les autres leviers sont déjà utilisés, ou hors de portée d'un pilote Vulkan :
+
+| Mécanisme | Constat |
+|---|---|
+| Fréquence GPU (102 à 1408 MHz) | le gouverneur du noyau la monte d'après le temps où le GPU a du travail en cours. Quand le GPU limite, il est déjà au maximum. Un pilote ne peut pas la forcer. |
+| Cache LLC du SoC | déjà attribué au GPU par le noyau (16 voies au-delà de 544 MHz, réglages « golden » `GL2ACEM_LLC_MTY0_CTRL` pour la mémoire de type 0 qu'utilise RADV). Rien à gagner. |
+| `cl_boost` (1,3 GHz) | réservé aux charges 100 % compute (OpenCL), jamais actif en jeu. |
+| **GVF** (limitation thermique) | le noyau insère des périodes d'inactivité forcée quand le GPU chauffe. C'est la cause la plus probable des chutes de FPS au bout de quelques minutes. Seul le refroidissement y peut quelque chose (coque retirée, ventilateur, pièce fraîche). |
+
+## 5. Ce qui change par rapport à radv-xclipse
 
 | | radv-xclipse | Nova |
 |---|---|---|
 | Optimisation | `debugoptimized` (`-O2 -g`) | `release` (`-O3`) |
 | Optimisation à l'édition de liens (LTO) | non | non : Mesa la refuse explicitement (« Building Mesa with LTO is not supported ») |
 | Processeur ciblé | `-march=armv8.2-a`, générique, tous les Exynos | `-mcpu=cortex-a720+nosve` : instructions et ordonnancement A720/A520, sans vectorisation SVE (aucun gain pour ce code, et un risque de plantage si le noyau ne l'expose pas) |
+| Profil Nova | — | `debug.radv_xclipse_nova` 1 / 2, désactivé par défaut |
 
-Effet attendu : un coût CPU plus faible pour tout ce que le pilote fait sur le processeur. Cela
-couvre l'enregistrement des commandes, les descripteurs et surtout la **compilation des shaders
-par ACO**, donc moins de saccades à la première rencontre d'un shader. Le gain attendu est
-**faible** : quelques pourcents du temps passé dans le pilote, souvent moins. Le travail du GPU
-lui-même n'est pas plus rapide. **Non mesuré sur un vrai Xclipse** : à comparer soi-même.
-
-## Particularités du Xclipse 540 encore inexploitées
-
-Le Xclipse est un hybride : processeur de commandes et registres GFX10.3 (RDNA2), cœur de
-shaders GFX11 (RDNA3). radv-xclipse compile bien les shaders en jeu d'instructions GFX11, mais
-désactive sur **tous** les Xclipse trois fonctions RDNA3 (`radv_shader.c`) : « Only the ISA is
-GFX11 […] RDNA3-only hardware features (dual-issue VALU) stay off ». Elles ont été mises au point
-sur le Xclipse 920, qui ne les a pas. Le 540 et le 940 sont décrits comme RDNA3.
-
-| Fonction RDNA3 | Désactivée car | Effet si le 540 l'a |
-|---|---|---|
-| **VOPD** (dual-issue VALU) | calibré sur le 920 | jusqu'à 2 opérations de calcul par cycle dans les shaders en wave32 |
-| **`v_permlane64_b32`** | « on the 920 the other half reads back 0 » | en wave64, chaque shuffle à index variable cesse d'être **une lecture par thread (jusqu'à 64 instructions)** |
-| **`s_delay_alu`** | calibré sur le 920 | indications d'ordonnancement, moins d'attentes |
-
-Nova ajoute une propriété par fonction, **désactivée par défaut**. Les trois sont incluses dans
-la clé du cache de shaders : changer un réglage recompile les shaders.
-
-### Le wave32, déjà disponible
-
-radv-xclipse exécute tous les shaders en **wave64** par défaut. Or en wave64 sur Xclipse, les
-shuffles de sous-groupe (utilisés par Eden pour l'instruction `SHFL` de la Switch, et par les
-shaders de Peanuts Native) passent par le chemin lent « one readlane per lane ». En **wave32**,
-un shuffle est une seule instruction (`ds_bpermute_b32`), et c'est aussi le mode où VOPD agit.
-Le wave32 est une option standard de RADV, réglable sans modifier le pilote.
-
-### Protocole de test (ADB, sans root)
-
-Toujours dans la même scène, en relançant l'application après chaque commande, et en notant les
-FPS à chaque étape :
-
-```
-# 1. wave32 pour tous les étages (option RADV standard, la moins risquée)
-adb shell setprop debug.mesa.radv.perftest cswave32,pswave32,gewave32
-# 2. v_permlane64 (shuffles wave64 rapides)
-adb shell setprop debug.radv_xclipse_permlane64 1
-# 3. indications s_delay_alu
-adb shell setprop debug.radv_xclipse_delay_alu 1
-# 4. dual-issue VOPD (agit en wave32, donc avec l'étape 1)
-adb shell setprop debug.radv_xclipse_vopd 1
-```
-
-Si une étape donne une image cassée, un plantage ou un blocage, cette fonction n'existe pas (ou
-pas sous cette forme) sur le 540 : l'annuler avec `adb shell setprop <propriété> ""`. Ces
-propriétés `debug.*` disparaissent aussi au redémarrage du téléphone.
+La compilation seule réduit le coût CPU du pilote (enregistrement des commandes, compilation
+des shaders par ACO, donc un peu moins de saccades) : quelques pourcents du temps passé dans le
+pilote. **Aucune de ces modifications n'a été mesurée sur un vrai Xclipse** : à comparer
+soi-même avec le protocole ci-dessus.
 
 ## Analyse faite
 
@@ -97,16 +158,14 @@ a besoin, sur un autre GPU, de :
 
 Le pilote Samsung d'origine n'a probablement pas `VK_EXT_map_memory_placed` : avec lui, Peanuts
 Native risque l'écran noir. radv-xclipse/Nova coche toutes les cases connues, mais personne n'a
-encore lancé Peanuts Native sur un Xclipse : c'est à tester.
+encore lancé Peanuts Native sur un Xclipse : c'est à tester. Peanuts Native demande aussi 12 Go
+de RAM, le Galaxy A56 en a 8.
 
-## Tester
+## Installer
 
-1. Importer le zip comme pilote GPU personnalisé (Eden : gestionnaire de pilotes ; Peanuts
-   Native : Settings › GPU driver › Install, fichier zip).
-2. Comparer avec le zip radv-xclipse v1.9.0 d'origine **dans la même scène** : FPS moyen, et
-   surtout saccades à la première ouverture d'une zone (compilation de shaders).
-3. En cas de problème, revenir au build d'origine : le code GPU est le même, seule la
-   compilation diffère.
+Importer le zip comme pilote GPU personnalisé (Eden : gestionnaire de pilotes ; Peanuts Native :
+Settings › GPU driver › Install, fichier zip). En cas de problème, effacer les propriétés
+`debug.radv_xclipse_*` ou revenir au zip radv-xclipse v1.9.0 d'origine.
 
 ## Reconstruire
 
