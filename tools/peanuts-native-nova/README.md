@@ -29,23 +29,40 @@ L'étape la plus lente fixe les FPS. Le replay est la plus lourde, et ton cœur 
 | `DM_VK_CS_WARM` | Turnip seulement | aussi avec **RADV** et le **pilote Samsung** | les shaders de calcul sont compilés à l'avance en arrière-plan, au lieu d'un blocage de 45 à 105 ms à leur premier usage |
 | Use fast cores | désactivé par défaut | **activé** par défaut | le replay garde le cœur à 2,9 GHz pour lui seul ; le jeu et l'encodeur ont les trois cœurs à 2,6 GHz, jamais les petits cœurs à 1,95 GHz |
 | Indicateur CPU de l'overlay | fréquence des 4 petits cœurs A520 (le groupe qui a le plus de cœurs) | fréquence des cœurs A720 à 2,6 GHz, ceux du jeu | l'indicateur dit enfin si les cœurs du jeu sont bridés par la chaleur |
+| Sous-groupes des shaders de calcul (`DM_VK_SUBGROUP_SMALL`) | 64 threads, la taille Adreno | **32 threads** avec RADV et le pilote Samsung | la taille native du Xclipse. En 64, radv-xclipse n'a pas `v_permlane64` : chaque échange de données entre threads (shuffle) devient une lecture par thread, jusqu'à 64 instructions au lieu d'une. La bibliothèque de shaders est prévue pour 32 ou 64 (elle découpe ses opérations en moitiés de 32) |
 
 Rien d'autre ne change : même traduction de shaders, mêmes profils de jeux, mêmes réglages.
+
+## La préparation des jeux (Build)
+
+Nova contient le vrai préparateur, reconstruit depuis le code source de la 0.1.9 (`peanuts/scripts/ondevice-stage.sh` :
+Python 3.14, Capstone, lz4, le traducteur de shaders en .NET NativeAOT, SPIRV-Tools, le worker de découpe). Elle a été
+vérifiée pour le Xclipse :
+
+| Ce que la préparation fixe | Valeur | Sur Xclipse |
+|---|---|---|
+| Taille de sous-groupe des modules | 64 threads (Adreno) | correcte : les modules sont justes sur 32 ou 64. Seul le choix fait **au lancement** comptait, corrigé ci-dessus |
+| Alignement des tampons de stockage | 64 octets | correct : l'alignement du Xclipse (RADV : 4) divise 64 |
+| Décalage des coordonnées de `textureGather` | 1/512 de texel | identique à la correction qu'Eden applique sur AMD et RADV (et Samsung, fix1 d'EdEn.claude) |
+| Mémoire partagée par groupe de travail | 32 Kio au plus | en dessous des 64 Kio du Xclipse |
+| Nombre de workers | selon les cœurs rapides (4 sur l'Exynos 1580) puis la RAM (2 sur un téléphone de 8 Go) | déjà adapté à l'A56 |
+
+Changer ces valeurs aurait changé la bibliothèque de shaders sans gain : les packs de l'officiel ne seraient plus
+compatibles. Elles restent identiques, et l'empreinte de la bibliothèque (`DMSH_VK_CHAIN` `ed3afea18bbf`) est celle de
+Peanuts Native 0.1.9 : un pack préparé par l'une des deux applications fonctionne dans l'autre.
 
 **Non mesuré sur un vrai Galaxy A56** : à comparer avec Peanuts Native, au même endroit et dans les mêmes
 réglages (FPS, FT et 1 %L de l'overlay).
 
 ## Installer et récupérer ses jeux
 
-Le préparateur de jeux de Nova est simulé (`-PnxPackEngine=fake`) : **on ne prépare pas un jeu dans Nova**,
-on reprend celui préparé par Peanuts Native.
-
-1. Dans **Peanuts Native** (l'officiel), sur la page du jeu : **Export pack…**, puis **Back up saves**.
-2. Installer `peanuts-nova-0.1.9-a56.apk`, ouvrir **Peanuts Nova** et accorder l'accès à tous les fichiers.
-3. **Add game** avec le même dossier ou fichier de jeu, puis **Import pack…** avec le zip exporté. Ne pas
-   toucher **Prepare** : il produirait un pack factice qui ne démarre pas.
-4. **Import save** (ou **Restore saves**) depuis `Switch2/save-backups/<title ID>/`.
-5. Réinstaller le pilote GPU (radv-xclipse ou Nova) dans Settings › GPU driver.
+1. Installer `peanuts-nova-0.1.9-a56.apk`, ouvrir **Peanuts Nova** et accorder l'accès à tous les fichiers.
+2. Ajouter le jeu et lancer **Build**, comme dans l'officiel. Pour éviter une nouvelle préparation, on peut
+   aussi reprendre celle de l'officiel : **Export pack…** sur la page du jeu dans Peanuts Native, puis
+   **Import pack…** dans Nova.
+3. Sauvegardes : **Back up saves** dans l'officiel, puis **Import save** (ou **Restore saves**) dans Nova depuis
+   `Switch2/save-backups/<title ID>/`.
+4. Réinstaller le pilote GPU (radv-xclipse ou Nova) dans Settings › GPU driver.
 
 Pour comparer les deux applications, garder les mêmes réglages : Nova active « Use fast cores » par défaut,
 on peut l'activer aussi dans l'officiel, ou le couper dans Nova.
@@ -53,7 +70,8 @@ on peut l'activer aussi dans l'officiel, ou le couper dans Nova.
 ## Reconstruire
 
 `./build-nova.sh [checkout peanuts-native]` (SDK Android avec NDK 28.2.13676358 et CMake 3.22.1 dans
-`$ANDROID_HOME`, JDK 17+, python3). Le script récupère le tag `v0.1.9-1`, applique `patches/` et écrit l'APK
-dans `dist/`. L'APK est signé avec une clé de débogage.
+`$ANDROID_HOME`, JDK 17+, python3 avec fontTools, zsh, SDK .NET 10). Le script récupère le tag `v0.1.9-1`, applique
+`patches/`, construit le préparateur dans `stage-work/` et écrit l'APK dans `dist/`. L'APK est signé avec une clé de
+débogage.
 
 Licence : Peanuts Native est sous GPL-3.0-or-later ; ces changements aussi.

@@ -1,0 +1,120 @@
+From c628eb1fe785bcd003fa581746f5f780c281ff8c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 27 Nov 2026 17:25:34 +0000
+Subject: [PATCH 2/2] Peanuts Nova: 32-lane compute subgroups on the Xclipse's
+ drivers
+
+DM_VK_SUBGROUP_SMALL (restart; default 1 on RADV and Samsung's driver):
+sg_plan pins the smallest subgroup size the shader library is right for
+(32 for the 64-lane library, which splits its ballots and shuffles into
+32-lane halves) instead of the largest. The Xclipse's native wave is 32
+lanes, and in wave64 radv-xclipse has no v_permlane64, so ACO makes every
+index shuffle one readlane per lane, up to 64 instructions.
+
+The library itself is unchanged: its target constants (64-lane modules,
+64-byte storage buffer alignment, the 1/512 gather bias, which Eden also
+applies on AMD and RADV) hold on the Xclipse, and the official app's
+packs keep fitting.
+---
+ dm/gfx/vk_android/vka_auto.h         |  1 +
+ dm/gfx/vk_android/vka_shader.c       | 10 ++++++++--
+ dm/host/tests/t_android_auto.c       |  7 ++++---
+ dm/tools/tests/test_auto_defaults.py |  3 ++-
+ docs/advanced_settings.tsv           |  1 +
+ docs/env_switches.tsv                |  1 +
+ 6 files changed, 17 insertions(+), 6 deletions(-)
+
+diff --git a/dm/gfx/vk_android/vka_auto.h b/dm/gfx/vk_android/vka_auto.h
+index 65c8dc70..385bd92a 100644
+--- a/dm/gfx/vk_android/vka_auto.h
++++ b/dm/gfx/vk_android/vka_auto.h
+@@ -44,6 +44,7 @@ static inline int vka_auto_rules(const vka_auto_in *in, vka_auto_rule *o, int ma
+     VKA_AUTO_ADD(t, "DM_VK_SHUFFLE_LDS", 1, NULL);                                                           // vka_shader.c shuffle_plan
+     VKA_AUTO_ADD(t, "DM_VK_QUAD_SHFL", 1, NULL);                                                             // vka_shader.c quad shuffles (PEANUTS)
+     VKA_AUTO_ADD(t || x, "DM_VK_CS_WARM", 1, NULL);                                                          // vka_pso.c cw_start (PEANUTS; NOVA: Xclipse too)
++    VKA_AUTO_ADD(x, "DM_VK_SUBGROUP_SMALL", 1, NULL);                                                       // vka_shader.c sg_plan (NOVA: Xclipse)
+     VKA_AUTO_ADD(t || q || r, "DM_VK_PUSH_DELTA", 1, NULL);                                               // vka_draw.c partial pushes (PEANUTS: #503; NOVA: RADV)
+     VKA_AUTO_ADD(q && in->prof_one_lane, "DM_VK_ONE_LANE", 1, "the profile's subgroup_one_lane");            // vka_shader.c one_lane_env
+     VKA_AUTO_ADD(q, "DM_VK_GS_FILL", 1, NULL);                                                               // vka_shader.c gs_fill
+diff --git a/dm/gfx/vk_android/vka_shader.c b/dm/gfx/vk_android/vka_shader.c
+index 7f785414..8647dc56 100644
+--- a/dm/gfx/vk_android/vka_shader.c
++++ b/dm/gfx/vk_android/vka_shader.c
+@@ -40,8 +40,14 @@ static void sg_plan(unsigned sg) {
+     static const char *const nm[8] = {"vertex", "tess control", "tess evaluation", "geometry", "fragment", "compute", "task", "mesh"};
+ #define SG_OK(n) (sg == 64 ? ((n) == 32 || (n) == 64) : (n) == sg)
+     unsigned pin = 0; int pm = VKA_ENV("DM_VK_SUBGROUP_PIN", 1); uint32_t pin_stages = pm == 1 ? V.subgroup_req_stages : V.subgroup_req_stages & (uint32_t)pm;
+-    if (V.subgroup_min != V.subgroup_max && pin_stages)
+-        for (unsigned c = sg; c >= 32 && !pin; c /= 2) if (SG_OK(c) && c >= V.subgroup_min && c <= V.subgroup_max) pin = c;
++    // NOVA: DM_VK_SUBGROUP_SMALL (restart; default 1 on RADV and Samsung's driver, the Xclipse GPUs, 0 elsewhere): pin the smallest size the library is right for
++    // (32 for a 64-lane library, which splits its ballots and shuffles into 32-lane halves) instead of the largest. The Xclipse's native wave is 32 lanes, and in
++    // wave64 radv-xclipse has no v_permlane64 (it reads back 0 on the Xclipse 920), so ACO makes every index shuffle one readlane per lane, up to 64 instructions
++    int small = VKA_ENV("DM_VK_SUBGROUP_SMALL", V.driver_id == VK_DRIVER_ID_MESA_RADV || V.driver_id == VK_DRIVER_ID_SAMSUNG_PROPRIETARY);
++    if (V.subgroup_min != V.subgroup_max && pin_stages) {
++        if (small) { for (unsigned c = 32; c <= sg && !pin; c *= 2) if (SG_OK(c) && c >= V.subgroup_min && c <= V.subgroup_max) pin = c; }
++        else for (unsigned c = sg; c >= 32 && !pin; c /= 2) if (SG_OK(c) && c >= V.subgroup_min && c <= V.subgroup_max) pin = c;
++    }
+     // Turnip's geometry stage computes subgroup operations wrong at a pinned 64 (T30, Mesa 26.3: DKB's terrain culling GS 5d537f7630ec3671 left the cave walls black; one-lane
+     // subgroups there drew them right, with every other stage pinned). Eden leaves geometry out of Turnip's subgroup stages too. DM_VK_SUBGROUP_GS (restart): 0 = the geometry
+     // stage runs one-lane subgroups, 1 = as the device reports; default 0 on VK_DRIVER_ID_MESA_TURNIP, 1 on other drivers
+diff --git a/dm/host/tests/t_android_auto.c b/dm/host/tests/t_android_auto.c
+index 88219bf5..362b66c8 100644
+--- a/dm/host/tests/t_android_auto.c
++++ b/dm/host/tests/t_android_auto.c
+@@ -55,11 +55,12 @@ int main(void) {
+     CHECK(!val(r, n, "DM_VK_VIN_DYN"), "old Qualcomm without the extension: nothing to turn off");
+ 
+     // Another driver (Mali, 9): nothing; the cap on the output is kept
+-    // NOVA: Xclipse. RADV: the compute warm-up and partial pushes; Samsung's own driver: the compute warm-up only (its push descriptors not read here)
++    // NOVA: Xclipse. RADV: the compute warm-up, partial pushes and 32-lane subgroups; Samsung's own driver: the compute warm-up and 32-lane subgroups (its push descriptors not read here)
+     n = vka_auto_rules(&(vka_auto_in){.driver_id = VKA_DRV_RADV, .mesh_ext = 1, .vin_dyn_ext = 1, .prof_one_lane = 1, .prof_prepass_cut = 1, .prof_oq_split = 1}, r, 16);
+-    CHECK(n == 2 && (v = val(r, n, "DM_VK_CS_WARM")) && !strcmp(v, "1") && (v = val(r, n, "DM_VK_PUSH_DELTA")) && !strcmp(v, "1"), "RADV: the compute warm-up and partial pushes only");
++    CHECK(n == 3 && (v = val(r, n, "DM_VK_CS_WARM")) && !strcmp(v, "1") && (v = val(r, n, "DM_VK_PUSH_DELTA")) && !strcmp(v, "1") && (v = val(r, n, "DM_VK_SUBGROUP_SMALL")) && !strcmp(v, "1"),
++          "RADV: the compute warm-up, partial pushes and 32-lane subgroups only");
+     n = vka_auto_rules(&(vka_auto_in){.driver_id = VKA_DRV_SAMSUNG, .mesh_ext = 1, .vin_dyn_ext = 1, .prof_one_lane = 1, .prof_prepass_cut = 1, .prof_oq_split = 1}, r, 16);
+-    CHECK(n == 1 && (v = val(r, n, "DM_VK_CS_WARM")) && !strcmp(v, "1"), "Samsung: the compute warm-up only");
++    CHECK(n == 2 && (v = val(r, n, "DM_VK_CS_WARM")) && !strcmp(v, "1") && (v = val(r, n, "DM_VK_SUBGROUP_SMALL")) && !strcmp(v, "1"), "Samsung: the compute warm-up and 32-lane subgroups only");
+     CHECK(vka_auto_rules(&(vka_auto_in){.driver_id = 9, .mesh_ext = 1, .vin_dyn_ext = 1, .prof_one_lane = 1, .prof_prepass_cut = 1, .prof_oq_split = 1}, r, 16) == 0, "other driver: no rule");
+     CHECK(vka_auto_rules(&(vka_auto_in){.driver_id = VKA_DRV_TURNIP}, r, 2) == 2, "at most max rules");
+ 
+diff --git a/dm/tools/tests/test_auto_defaults.py b/dm/tools/tests/test_auto_defaults.py
+index 595b6284..e7007ee0 100644
+--- a/dm/tools/tests/test_auto_defaults.py
++++ b/dm/tools/tests/test_auto_defaults.py
+@@ -32,7 +32,8 @@ def rules():
+     out = {}
+     for m in re.finditer(r'VKA_AUTO_ADD\((.*?),\s*"(DM_VK_[A-Z0-9_]+)"', body):
+         cond = m.group(1)
+-        word = 'Turnip' if re.search(r'\bt\b', cond) else "Qualcomm" if re.search(r'\bq\b|qcom_old', cond) else None
++        word = 'Turnip' if re.search(r'\bt\b', cond) else "Qualcomm" if re.search(r'\bq\b|qcom_old', cond) else 'RADV' if re.search(r'\br\b', cond) \
++            else 'Xclipse' if re.search(r'\bx\b', cond) else None   # NOVA: r (RADV), x (RADV or Samsung's driver: the Xclipse GPUs)
+         out[m.group(2)] = word
+     return out
+ 
+diff --git a/docs/advanced_settings.tsv b/docs/advanced_settings.tsv
+index f76a49d5..1f138f19 100644
+--- a/docs/advanced_settings.tsv
++++ b/docs/advanced_settings.tsv
+@@ -747,6 +747,7 @@ DM_VK_STORAGE_FIRST_USE	developer	Graphics			text			both
+ DM_VK_STRETCH	developer	Graphics			text			both						
+ DM_VK_SUBGROUP_GS	developer	Graphics			text		0 (one-lane geometry subgroups) with Turnip, 1 with other drivers	both						
+ DM_VK_SUBGROUP_PIN	developer	Performance			text			both						
++DM_VK_SUBGROUP_SMALL	developer	Performance			text		1 (32-lane subgroups) with the Xclipse's drivers (RADV, Samsung's), 0 with other drivers	both						
+ DM_VK_SWAP_RB	developer	Diagnostics			text			both						
+ DM_VK_SYNCLOG	developer	Diagnostics			text			both						
+ DM_VK_TABLE_POOL	developer	Memory			text			both						
+diff --git a/docs/env_switches.tsv b/docs/env_switches.tsv
+index 0766db58..759f4cd3 100644
+--- a/docs/env_switches.tsv
++++ b/docs/env_switches.tsv
+@@ -745,6 +745,7 @@ DM_VK_STORAGE_FIRST_USE	switch	`=0` (Android): an uncompressed texture whose fir
+ DM_VK_STRETCH	player	`1` (Android, live, off) the game's picture is stretched over the whole window instead of fitted with its aspect ratio kept (`vka_present_fit.h`); Game settings › Display › Stretch to screen and the in-game panel's Picture › Fit / Stretch set it, per game; the panel's change reaches the running game through `DM_CTL` and the launcher maps touches to the same rectangle
+ DM_VK_SUBGROUP_GS	switch	`0` / `1` (Android, restart) `0`: the geometry stage runs one-lane subgroups; `1`: as the device reports; default 0 on Turnip (which computes subgroup operations wrong there), 1 on other drivers
+ DM_VK_SUBGROUP_PIN	switch	`=<stage mask>` (Android, restart, default 1 = every stage that can) the stages (`VkShaderStageFlags`) whose subgroup size is pinned to the shader library's; `0` none
++DM_VK_SUBGROUP_SMALL	switch	`0` / `1` (Android, restart; default 1 on the Xclipse's drivers, RADV and Samsung's, 0 on other drivers) pin the smallest subgroup size the shader library is right for (32) instead of the largest (64) [NOVA]
+ DM_VK_SWAP_RB	diagnostic	`=<n>` the present's red/blue swap (`vka_present.c vka_swap_rb`; default the profile's `DM_GAME_SWAP_RB`, else 0)
+ DM_VK_SYNCLOG	diagnostic	`=<n>` (Android, live, 0 = off) logs the game's next n waits together with each submission's recording and queueing times and timestamp reports (`sync …` lines, one clock in ms)
+ DM_VK_TABLE_POOL	switch	[PEANUTS] `0` (Android, restart, default 1) keeps a texture array over a table of handles in a uniform buffer as the library has it, 32 elements with the index clamped; by default such a module reads the table's handles itself and takes their textures from the texture pool (`vka_shader.c` `tabpool`, [shaders.md](reference/shaders.md#a-table-of-handles-longer-than-the-translators-32-element-array-android))
+-- 
+2.43.0
+
