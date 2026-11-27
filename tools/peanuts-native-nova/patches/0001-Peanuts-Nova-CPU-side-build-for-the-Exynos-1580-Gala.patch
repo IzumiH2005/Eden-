@@ -1,0 +1,294 @@
+From 1deb50f88ac11697d35b25558209b813cc938c6f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 27 Nov 2026 17:12:54 +0000
+Subject: [PATCH] Peanuts Nova: CPU-side build for the Exynos 1580 (Galaxy A56)
+
+On the Galaxy A56 the frame waits for the CPU: Tears of the Kingdom runs
+31 ms a frame with 20 ms of GPU work.
+
+- android/host: the whole host at -O2 (it was the Mac host's -O1), the
+  replay (dm/gfx/vk_android) at -O3 (was -O2).
+- build.gradle: -PnxCpu=<cpu> passes -mcpu to every native library
+  (cortex-a720+nosve for the A56: Armv9.2, LSE atomics in place of LL/SC
+  loops between the replay and the encoder).
+- vka_auto.h: DM_VK_PUSH_DELTA on RADV (its push set keeps its words
+  between pushes of one layout, radv_init_push_descriptor_set), and
+  DM_VK_CS_WARM on RADV and Samsung's Xclipse driver.
+- Use fast cores on by default: the replay keeps the fastest core.
+- Overlay and DeviceStats: the CPU cap is read on the cluster the game's
+  threads run on (at 75 % of the top clock or more), not on the policy
+  with the most cores, which is the small cores' on a 1 + 3 + 4 CPU.
+---
+ android/app/build.gradle                                 | 3 +++
+ .../app/src/main/java/dev/nxnative/android/Overlay.java  | 9 ++++++++-
+ .../app/src/main/java/dev/nxnative/android/Prefs.java    | 5 +++--
+ .../app/src/main/java/dev/peanuts/ui/DeviceStats.java    | 8 +++++++-
+ .../app/src/main/java/dev/peanuts/ui/SettingsHelp.java   | 2 +-
+ android/host/CMakeLists.txt                              | 8 ++++----
+ dm/gfx/vk_android/vka_auto.h                             | 7 ++++---
+ dm/gfx/vk_android/vka_dev.c                              | 3 ++-
+ dm/gfx/vk_android/vka_draw.c                             | 4 +++-
+ dm/gfx/vk_android/vka_pso.c                              | 3 ++-
+ dm/host/tests/t_android_auto.c                           | 5 +++++
+ docs/advanced_settings.tsv                               | 4 ++--
+ docs/env_switches.tsv                                    | 4 ++--
+ 13 files changed, 46 insertions(+), 19 deletions(-)
+
+diff --git a/android/app/build.gradle b/android/app/build.gradle
+index 8073e249..1468b19a 100644
+--- a/android/app/build.gradle
++++ b/android/app/build.gradle
+@@ -56,6 +56,8 @@ def peanutsVersionFile = file('../../peanuts/VERSION')
+ def peanutsVersion = providers.gradleProperty('nxVersion').getOrElse(peanutsVersionFile.isFile() ? peanutsVersionFile.text.trim() : '0.0.0')
+ def nxPeanutsId = nxApp == 'peanuts' ? "peanuts-native-${peanutsVersion}" + (nxRelease ? '' : '-dev') : ''
+ // Lossless Scaling frame generation (GPL-3.0-or-later, dm/gfx/vk_android/lsfg): in by default, which makes the APK GPL-3.0-or-later; -PnxLsfg=false builds without it (the packer's libdmsh_xlate.so is GPL-3.0-or-later too: android/NOTICE.md)
++// NOVA: -PnxCpu=<cpu> (e.g. cortex-a720+nosve) compiles every native library of the APK for that CPU (-mcpu); unset, the NDK's generic armv8-a
++def nxCpu = providers.gradleProperty('nxCpu').getOrElse('')
+ def nxLsfg = providers.gradleProperty('nxLsfg').getOrElse('true') != 'false'
+ // Preparing the game on the phone (android/ONDEVICE.md): "+ Add game" on a dump without a usable pack offers Prepare, which runs PackService (a foreground service
+ // in :pack) with the embedded packer: CPython 3.14 with the repository's tools, the translator (libdmsh_xlate.so) and SPIRV-Tools (libSPIRV-Tools-shared.so). Part of
+@@ -371,6 +373,7 @@ android {
+             cmake {
+                 // PEANUTS: -PnxGenericHost=true builds one libnxhost.so/libnxlaunch.so that loads any of nxGames' profiles at
+                 // run time, instead of a compiled-in pair per title - gated here, not on by default, so the per-title path (today's APK) stays available.
++                if (nxCpu) { cFlags "-mcpu=$nxCpu"; cppFlags "-mcpu=$nxCpu" }   // NOVA
+                 if (nxGenericHost) {
+                     arguments '-DNX_GENERIC_HOST=ON', '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON', "-DNX_LSFG=${nxLsfg ? 'ON' : 'OFF'}"
+                     targets(*(['nxhost', 'nxlaunch', 'nxadreno', 'hook_impl', 'main_hook'] + (nxApp == 'peanuts' ? ['nximport'] : [])))
+diff --git a/android/app/src/main/java/dev/nxnative/android/Overlay.java b/android/app/src/main/java/dev/nxnative/android/Overlay.java
+index 463f4024..1ad22a1d 100644
+--- a/android/app/src/main/java/dev/nxnative/android/Overlay.java
++++ b/android/app/src/main/java/dev/nxnative/android/Overlay.java
+@@ -144,7 +144,14 @@ final class Overlay {
+             catch (IOException | RuntimeException e) { k.cores = 1; }
+             if (k.maxKHz > 0) clusters.add(k);
+         }
+-        clusters.sort((a, b) -> a.cores != b.cores ? b.cores - a.cores : Long.compare(a.maxKHz, b.maxKHz));
++        // NOVA: the main cluster among those at 75 % of the top clock or more (the cores nxlaunch.c pinThreads gives the game), else among all: on a 1 + 3 + 4 CPU
++        // (Exynos 1580: 1 x 2.9, 3 x 2.6, 4 x 1.95 GHz) the policy with the most cores was the small cores', whose cap says nothing of the game's
++        long top = 0; for (Cluster k : clusters) top = Math.max(top, k.maxKHz);
++        final long t = top;
++        clusters.sort((a, b) -> {
++            boolean ba = a.maxKHz * 4 >= t * 3, bb = b.maxKHz * 4 >= t * 3;
++            return ba != bb ? (ba ? -1 : 1) : a.cores != b.cores ? b.cores - a.cores : Long.compare(a.maxKHz, b.maxKHz);
++        });
+     }
+ 
+     private void readCpu() {
+diff --git a/android/app/src/main/java/dev/nxnative/android/Prefs.java b/android/app/src/main/java/dev/nxnative/android/Prefs.java
+index 6e7a5ca9..7cab7c04 100644
+--- a/android/app/src/main/java/dev/nxnative/android/Prefs.java
++++ b/android/app/src/main/java/dev/nxnative/android/Prefs.java
+@@ -52,8 +52,9 @@ final class Prefs {
+     static void rumbleDefault(Context c, boolean on) { of(c).edit().putBoolean("rumble", on).commit(); }
+     static boolean rumble(Context c, String titleId) { return of(c).getBoolean(gameKey("rumble", titleId), rumble(c)); }
+     static void rumble(Context c, String titleId, boolean on) { of(c).edit().putBoolean(gameKey("rumble", titleId), on).commit(); }
+-    /** Use fast cores (Native.pinThreads): the main screen's default (off: not measured yet, and it may work against the ADPF hint session of vka_perf.c), then each game's own */
+-    static boolean pinThreads(Context c) { return of(c).getBoolean("pin_threads", false); }
++    /** Use fast cores (Native.pinThreads): the main screen's default, then each game's own. NOVA: on by default (upstream: off, not measured yet, and it may work against the
++     *  ADPF hint session of vka_perf.c): the replay thread, the most work a frame on one thread, then keeps the fastest core to itself instead of the scheduler moving it */
++    static boolean pinThreads(Context c) { return of(c).getBoolean("pin_threads", true); }
+     static void pinThreadsDefault(Context c, boolean on) { of(c).edit().putBoolean("pin_threads", on).commit(); }
+     static boolean pinThreads(Context c, String titleId) { return of(c).getBoolean(gameKey("pin_threads", titleId), pinThreads(c)); }
+     static void pinThreads(Context c, String titleId, boolean on) { of(c).edit().putBoolean(gameKey("pin_threads", titleId), on).commit(); }
+diff --git a/android/app/src/main/java/dev/peanuts/ui/DeviceStats.java b/android/app/src/main/java/dev/peanuts/ui/DeviceStats.java
+index 7e81247d..84395d08 100644
+--- a/android/app/src/main/java/dev/peanuts/ui/DeviceStats.java
++++ b/android/app/src/main/java/dev/peanuts/ui/DeviceStats.java
+@@ -102,9 +102,15 @@ public final class DeviceStats {
+         if (ps == null) return null;
+         List<File> list = new ArrayList<>();
+         for (File p : ps) if (readLong(new File(p, "cpuinfo_max_freq")) > 0) list.add(p);
++        // NOVA: among the policies at 75 % of the top clock or more first (as Overlay.findClusters): on a 1 + 3 + 4 CPU the most cores are the small ones
++        long top = 0; for (File p : list) top = Math.max(top, readLong(new File(p, "cpuinfo_max_freq")));
++        final long t = top;
+         list.sort((a, b) -> {
++            long ma = readLong(new File(a, "cpuinfo_max_freq")), mb = readLong(new File(b, "cpuinfo_max_freq"));
++            boolean ba = ma * 4 >= t * 3, bb = mb * 4 >= t * 3;
++            if (ba != bb) return ba ? -1 : 1;
+             int ca = cores(a), cb = cores(b);
+-            return ca != cb ? cb - ca : Long.compare(readLong(new File(a, "cpuinfo_max_freq")), readLong(new File(b, "cpuinfo_max_freq")));
++            return ca != cb ? cb - ca : Long.compare(ma, mb);
+         });
+         main = list.isEmpty() ? null : list.get(0);
+         return main;
+diff --git a/android/app/src/main/java/dev/peanuts/ui/SettingsHelp.java b/android/app/src/main/java/dev/peanuts/ui/SettingsHelp.java
+index 2af9416d..1cda40ba 100644
+--- a/android/app/src/main/java/dev/peanuts/ui/SettingsHelp.java
++++ b/android/app/src/main/java/dev/peanuts/ui/SettingsHelp.java
+@@ -50,7 +50,7 @@ public final class SettingsHelp {
+         put(m, "Dynamic resolution", "Lets a game draw smaller while a scene is heavy, so its frame rate holds.", "40%");
+         put(m, "Frame rate cap", "The highest frame rate games run at. A lower cap saves battery and keeps the device cooler.", "60 fps");
+         put(m, "Frame generation", "Draws frames between the game's own, for smoother motion with a little more input delay. Needs Lossless.dll.", "Off");
+-        put(m, "Use fast cores", "Keeps the game's busiest threads off the small cores of the processor. Faster, and a little warmer.", "Off");
++        put(m, "Use fast cores", "Keeps the game's busiest threads off the small cores of the processor. Faster, and a little warmer.", "On");
+         put(m, "Overlay", "Shows the frame rate and other values over the game. Tap the row to pick what it shows.", "On");
+         // Controls
+         put(m, "Button mapping", "Which button of your controller presses which Switch button. A game can have its own.", null);
+diff --git a/android/host/CMakeLists.txt b/android/host/CMakeLists.txt
+index e19d1786..5ff74fb1 100644
+--- a/android/host/CMakeLists.txt
++++ b/android/host/CMakeLists.txt
+@@ -140,10 +140,10 @@ function(nxhost_add tgt game)
+   target_compile_definitions(${tgt} PRIVATE _GNU_SOURCE DM_NUP_ZSTD DM_NSP_DIRECT NX_COOP_VENDOR=${NX_COOP_VENDOR} $<$<BOOL:${NX_LSFG}>:NX_LSFG>)   # PEANUTS: DM_NSP_DIRECT (the reader of dumps is linked: NSP_C above)
+   # As the Mac host (-O1 -g -Wall -Wno-unused-function). Hidden visibility: the assembly reaches C symbols with adrp, which a shared library allows only for symbols it binds itself
+   # -Wno-format: the host prints uint64_t with %ll* (unsigned long long on Darwin, unsigned long on Linux: the same 64 bits)
+-  target_compile_options(${tgt} PRIVATE -O1 -g -Wall -Wno-unused-function -Wno-format -fvisibility=hidden)
++  target_compile_options(${tgt} PRIVATE -O2 -g -Wall -Wno-unused-function -Wno-format -fvisibility=hidden)   # NOVA: -O2 for the whole host (was the Mac host's -O1)
+   # The replay's draw path runs per draw (thousands a frame): -O2 there (the rest stays at the Mac host's -O1, a later option wins)
+   file(GLOB VKA_C ${GFX}/vk_android/*.c)
+-  set_source_files_properties(${VKA_C} PROPERTIES COMPILE_OPTIONS -O2)
++  set_source_files_properties(${VKA_C} PROPERTIES COMPILE_OPTIONS -O3)   # NOVA: the replay at -O3 (was -O2)
+   target_link_options(${tgt} PRIVATE -Wl,-Bsymbolic -Wl,--no-undefined -Wl,--error-limit=0 -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libnxhost.map)
+   set_target_properties(${tgt} PROPERTIES LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/libnxhost.map)
+   target_link_libraries(${tgt} PRIVATE vpx dav1d zstddec aaudio mediandk android log m dl z)   # libvulkan.so is opened at run time (vka_dev.c)
+@@ -170,9 +170,9 @@ function(nxhost_add_generic tgt)
+   set_target_properties(${tgt} PROPERTIES LINKER_LANGUAGE CXX)
+   target_include_directories(${tgt} PRIVATE ${GEN_INC} ${GEN} ${PROFILE_DIR} ${GFX}/nvn/include ${TP}/vulkan-headers/include ${TP}/libvpx ${TP}/libvpx/config ${TP}/dav1d/include ${TP}/stb_vorbis ${HOST} ${NX_COOP_VENDOR_DIR})   # (the co-op module, as the per-title hosts)
+   target_compile_definitions(${tgt} PRIVATE _GNU_SOURCE DM_NUP_ZSTD DM_NSP_DIRECT NX_COOP_VENDOR=${NX_COOP_VENDOR} $<$<BOOL:${NX_LSFG}>:NX_LSFG>)   # PEANUTS: DM_NSP_DIRECT (the reader of dumps is linked: NSP_C above)
+-  target_compile_options(${tgt} PRIVATE -O1 -g -Wall -Wno-unused-function -Wno-format -fvisibility=hidden)
++  target_compile_options(${tgt} PRIVATE -O2 -g -Wall -Wno-unused-function -Wno-format -fvisibility=hidden)   # NOVA: -O2 for the whole host (was the Mac host's -O1)
+   file(GLOB VKA_C ${GFX}/vk_android/*.c)
+-  set_source_files_properties(${VKA_C} PROPERTIES COMPILE_OPTIONS -O2)
++  set_source_files_properties(${VKA_C} PROPERTIES COMPILE_OPTIONS -O3)   # NOVA: the replay at -O3 (was -O2)
+   target_link_options(${tgt} PRIVATE -Wl,-Bsymbolic -Wl,--no-undefined -Wl,--error-limit=0 -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libnxhost.map)
+   set_target_properties(${tgt} PROPERTIES LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/libnxhost.map)
+   target_link_libraries(${tgt} PRIVATE vpx dav1d zstddec aaudio mediandk android log m dl z)
+diff --git a/dm/gfx/vk_android/vka_auto.h b/dm/gfx/vk_android/vka_auto.h
+index 6e6aecdd..65c8dc70 100644
+--- a/dm/gfx/vk_android/vka_auto.h
++++ b/dm/gfx/vk_android/vka_auto.h
+@@ -12,7 +12,7 @@
+ #include <string.h>
+ #include "vka_psogate.h"
+ 
+-enum { VKA_DRV_QCOM = 8, VKA_DRV_TURNIP = 18 };   // VK_DRIVER_ID_QUALCOMM_PROPRIETARY, VK_DRIVER_ID_MESA_TURNIP (vka_dev.c checks them against the Vulkan header)
++enum { VKA_DRV_QCOM = 8, VKA_DRV_TURNIP = 18, VKA_DRV_RADV = 3, VKA_DRV_SAMSUNG = 21 };   // VK_DRIVER_ID_QUALCOMM_PROPRIETARY, VK_DRIVER_ID_MESA_TURNIP, VK_DRIVER_ID_MESA_RADV, VK_DRIVER_ID_SAMSUNG_PROPRIETARY (vka_dev.c checks them against the Vulkan header)
+ 
+ typedef struct {
+     int driver_id;          // VkPhysicalDeviceDriverProperties.driverID
+@@ -30,6 +30,7 @@ typedef struct { const char *key, *why; char val[8]; } vka_auto_rule;   // why:
+ // The rules that hold for in, in a fixed order; returns how many (at most max)
+ static inline int vka_auto_rules(const vka_auto_in *in, vka_auto_rule *o, int max) {
+     int n = 0, q = in->driver_id == VKA_DRV_QCOM, t = in->driver_id == VKA_DRV_TURNIP;
++    int r = in->driver_id == VKA_DRV_RADV, x = r || in->driver_id == VKA_DRV_SAMSUNG;   // NOVA: Samsung Xclipse (radv-xclipse, Samsung's own driver)
+ #define VKA_AUTO_ADD(c, k, v, w) do { if ((c) && n < max) { o[n].key = (k); o[n].why = (w); snprintf(o[n].val, sizeof o[n].val, "%d", (int)(v)); n++; } } while (0)
+     VKA_AUTO_ADD(q && in->mesh_ext, "DM_VK_MESH", 0, "mesh draws through compute");                          // vka_dev.c mesh_qcom
+     VKA_AUTO_ADD(in->qcom_old && in->vin_dyn_ext, "DM_VK_VIN_DYN", 0, "driver version before 512.800");     // vka_dev.c
+@@ -42,8 +43,8 @@ static inline int vka_auto_rules(const vka_auto_in *in, vka_auto_rule *o, int ma
+     VKA_AUTO_ADD(t, "DM_VK_SUBGROUP_GS", 0, NULL);                                                           // vka_shader.c sg_plan
+     VKA_AUTO_ADD(t, "DM_VK_SHUFFLE_LDS", 1, NULL);                                                           // vka_shader.c shuffle_plan
+     VKA_AUTO_ADD(t, "DM_VK_QUAD_SHFL", 1, NULL);                                                             // vka_shader.c quad shuffles (PEANUTS)
+-    VKA_AUTO_ADD(t, "DM_VK_CS_WARM", 1, NULL);                                                               // vka_pso.c cw_start (PEANUTS)
+-    VKA_AUTO_ADD(t || q, "DM_VK_PUSH_DELTA", 1, NULL);                                                    // vka_draw.c partial pushes (PEANUTS: #503)
++    VKA_AUTO_ADD(t || x, "DM_VK_CS_WARM", 1, NULL);                                                          // vka_pso.c cw_start (PEANUTS; NOVA: Xclipse too)
++    VKA_AUTO_ADD(t || q || r, "DM_VK_PUSH_DELTA", 1, NULL);                                               // vka_draw.c partial pushes (PEANUTS: #503; NOVA: RADV)
+     VKA_AUTO_ADD(q && in->prof_one_lane, "DM_VK_ONE_LANE", 1, "the profile's subgroup_one_lane");            // vka_shader.c one_lane_env
+     VKA_AUTO_ADD(q, "DM_VK_GS_FILL", 1, NULL);                                                               // vka_shader.c gs_fill
+     VKA_AUTO_ADD(q && !in->memu && in->prof_prepass_cut, "DM_VK_MESH_PREPASS_SKIP", 1, "the profile's mesh_prepass_cut, mesh shaders on");   // vka_draw.c mesh_cut
+diff --git a/dm/gfx/vk_android/vka_dev.c b/dm/gfx/vk_android/vka_dev.c
+index 5477fb72..3920ccee 100644
+--- a/dm/gfx/vk_android/vka_dev.c
++++ b/dm/gfx/vk_android/vka_dev.c
+@@ -12,7 +12,8 @@
+ #include "../../peanuts/peanuts_memory_probe.h"   // PEANUTS: guest-buffer remap probe (#47)
+ #include "vka_tlsig.h"
+ #include "vka_auto.h"
+-_Static_assert(VKA_DRV_QCOM == VK_DRIVER_ID_QUALCOMM_PROPRIETARY && VKA_DRV_TURNIP == VK_DRIVER_ID_MESA_TURNIP, "vka_auto.h driver IDs");
++_Static_assert(VKA_DRV_QCOM == VK_DRIVER_ID_QUALCOMM_PROPRIETARY && VKA_DRV_TURNIP == VK_DRIVER_ID_MESA_TURNIP && VKA_DRV_RADV == VK_DRIVER_ID_MESA_RADV &&
++               VKA_DRV_SAMSUNG == VK_DRIVER_ID_SAMSUNG_PROPRIETARY, "vka_auto.h driver IDs");
+ 
+ // One "[auto] KEY=value because driver_id=N (name)" line for each automatic default by driver this device takes (vka_auto.h), once per run at device creation; a switch
+ // that is set (env.txt, the launcher, live control before this point) prints nothing: its value is the player's
+diff --git a/dm/gfx/vk_android/vka_draw.c b/dm/gfx/vk_android/vka_draw.c
+index 49d717d5..54df8e96 100644
+--- a/dm/gfx/vk_android/vka_draw.c
++++ b/dm/gfx/vk_android/vka_draw.c
+@@ -1816,7 +1816,9 @@ static int push_same(VkPipelineBindPoint bp, VkPipelineLayout layout) {
+     // only those are pushed. Vulkan lets push descriptors be updated incrementally; the others stay as the last push left them (until the set is disturbed: a new command
+     // buffer or part, a set bound in its place, which forget g_pd)
+     g_dwn = 0;
+-    if (VKA_ENV("DM_VK_PUSH_DELTA", V.driver_id == VK_DRIVER_ID_MESA_TURNIP || V.driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) && g_pd[c].n == k && g_pd[c].w[0] == buf[0] && g_pd[c].w[1] == buf[1]) {   // PEANUTS: #503 #505 #562 #563
++    // NOVA: RADV too. Its push set keeps its words between pushes of one command buffer and bind point (radv_init_push_descriptor_set reallocates only for a larger
++    // layout, and a delta follows a push of the same layout), and the set is uploaded whole at the draw, so the CPU writes only the changed descriptors
++    if (VKA_ENV("DM_VK_PUSH_DELTA", V.driver_id == VK_DRIVER_ID_MESA_TURNIP || V.driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY || V.driver_id == VK_DRIVER_ID_MESA_RADV) && g_pd[c].n == k && g_pd[c].w[0] == buf[0] && g_pd[c].w[1] == buf[1]) {   // PEANUTS: #503 #505 #562 #563
+         int ok = 1;
+         for (uint32_t i = 0; i < g_w.n && ok; i++) {
+             const uint64_t *a = g_pd[c].w + 2 + 4 * (size_t)i, *b = buf + 2 + 4 * (size_t)i;
+diff --git a/dm/gfx/vk_android/vka_pso.c b/dm/gfx/vk_android/vka_pso.c
+index b597a786..7cb57e0a 100644
+--- a/dm/gfx/vk_android/vka_pso.c
++++ b/dm/gfx/vk_android/vka_pso.c
+@@ -1445,7 +1445,8 @@ static void *cw_main(void *a) {
+     return NULL;
+ }
+ static void cw_start(void) {
+-    if (!VKA_ENV("DM_VK_CS_WARM", V.driver_id == VK_DRIVER_ID_MESA_TURNIP)) return;   // PEANUTS: Turnip only by default (above)
++    // NOVA: on Xclipse's drivers too (RADV, Samsung's): a first dispatch otherwise compiles its pipeline on the frame path
++    if (!VKA_ENV("DM_VK_CS_WARM", V.driver_id == VK_DRIVER_ID_MESA_TURNIP || V.driver_id == VK_DRIVER_ID_MESA_RADV || V.driver_id == VK_DRIVER_ID_SAMSUNG_PROPRIETARY)) return;
+     pthread_t th; if (!pthread_create(&th, NULL, cw_main, NULL)) pthread_detach(th);
+ }
+ // PEANUTS end
+diff --git a/dm/host/tests/t_android_auto.c b/dm/host/tests/t_android_auto.c
+index 7a1be25d..88219bf5 100644
+--- a/dm/host/tests/t_android_auto.c
++++ b/dm/host/tests/t_android_auto.c
+@@ -55,6 +55,11 @@ int main(void) {
+     CHECK(!val(r, n, "DM_VK_VIN_DYN"), "old Qualcomm without the extension: nothing to turn off");
+ 
+     // Another driver (Mali, 9): nothing; the cap on the output is kept
++    // NOVA: Xclipse. RADV: the compute warm-up and partial pushes; Samsung's own driver: the compute warm-up only (its push descriptors not read here)
++    n = vka_auto_rules(&(vka_auto_in){.driver_id = VKA_DRV_RADV, .mesh_ext = 1, .vin_dyn_ext = 1, .prof_one_lane = 1, .prof_prepass_cut = 1, .prof_oq_split = 1}, r, 16);
++    CHECK(n == 2 && (v = val(r, n, "DM_VK_CS_WARM")) && !strcmp(v, "1") && (v = val(r, n, "DM_VK_PUSH_DELTA")) && !strcmp(v, "1"), "RADV: the compute warm-up and partial pushes only");
++    n = vka_auto_rules(&(vka_auto_in){.driver_id = VKA_DRV_SAMSUNG, .mesh_ext = 1, .vin_dyn_ext = 1, .prof_one_lane = 1, .prof_prepass_cut = 1, .prof_oq_split = 1}, r, 16);
++    CHECK(n == 1 && (v = val(r, n, "DM_VK_CS_WARM")) && !strcmp(v, "1"), "Samsung: the compute warm-up only");
+     CHECK(vka_auto_rules(&(vka_auto_in){.driver_id = 9, .mesh_ext = 1, .vin_dyn_ext = 1, .prof_one_lane = 1, .prof_prepass_cut = 1, .prof_oq_split = 1}, r, 16) == 0, "other driver: no rule");
+     CHECK(vka_auto_rules(&(vka_auto_in){.driver_id = VKA_DRV_TURNIP}, r, 2) == 2, "at most max rules");
+ 
+diff --git a/docs/advanced_settings.tsv b/docs/advanced_settings.tsv
+index a71c728b..f76a49d5 100644
+--- a/docs/advanced_settings.tsv
++++ b/docs/advanced_settings.tsv
+@@ -485,7 +485,7 @@ DM_VK_CS_ASYNC_RETYPE	developer	Graphics			text			both
+ DM_VK_CS_LANE	developer	Performance			text			both						
+ DM_VK_CS_LANE_MEM_MB	developer	Performance			text			both						
+ DM_VK_CS_SHARED_OVER	developer	Diagnostics			text			both						
+-DM_VK_CS_WARM	developer	Performance			text		1 on Turnip, 0 elsewhere; DM_VK_CS_WARM=1 forces it on	both						
++DM_VK_CS_WARM	developer	Performance			text		1 on Turnip, RADV and Samsung's Xclipse driver, 0 elsewhere; DM_VK_CS_WARM=1 forces it on	both						
+ DM_VK_CS_WARM_MAX	developer	Performance			text			both						
+ DM_VK_CS_WARM_STOP_MS	developer	Performance			text			both						
+ DM_VK_DEVICE_FAULT	developer	Graphics			text			both						
+@@ -692,7 +692,7 @@ DM_VK_PSO_PREP_MEM_MB	developer	Memory			text			both
+ DM_VK_PSO_PREP_THREADS	developer	Performance			text			both						
+ DM_VK_PSO_SLOTS	developer	Performance			text		1 with Turnip, 4 with other drivers	both						
+ DM_VK_PUSH_DEDUP	developer	Graphics			text			both						
+-DM_VK_PUSH_DELTA	developer	Diagnostics			text		1 on Turnip and Qualcomm, 0 on other drivers	both						
++DM_VK_PUSH_DELTA	developer	Diagnostics			text		1 on Turnip, Qualcomm and RADV, 0 on other drivers	both						
+ DM_VK_QS_TRACE	developer	Diagnostics			text			both						
+ DM_VK_QUAD_SHFL	developer	Graphics			text		1 with Turnip, 0 with other drivers	both						
+ DM_VK_RANGE_WATCH	developer	Diagnostics			text			both						
+diff --git a/docs/env_switches.tsv b/docs/env_switches.tsv
+index 75cfa400..0766db58 100644
+--- a/docs/env_switches.tsv
++++ b/docs/env_switches.tsv
+@@ -483,7 +483,7 @@ DM_VK_CS_ASYNC_RETYPE	switch	`0` (Android, live, 1; with `DM_VK_CS_ASYNC`) a com
+ DM_VK_CS_LANE	switch	`=<n>` (Android, restart, 2; at most 2) threads of the compute lane: compute pipelines made in the background (`DM_VK_CS_ASYNC`) get a queue of their own, built outside the graphics gate, cheapest first, so a compute build no longer holds the gate's slot while draws' graphics pipelines wait; `0` no lane, compute through the graphics queue as before [PEANUTS]
+ DM_VK_CS_LANE_MEM_MB	switch	`=<MiB>` (Android, restart, 1024; `0` never) the compute lane (`DM_VK_CS_LANE`) waits before each build while the phone has less memory available than this [PEANUTS]
+ DM_VK_CS_SHARED_OVER	diagnostic	`1` (Android, live, off) makes compute programs whose shared memory exceeds the device's `maxComputeSharedMemorySize` anyway (by default they are not made and their dispatches are skipped); an A/B
+-DM_VK_CS_WARM	switch	`0`/`1` (Android, restart; 1 on Turnip, 0 elsewhere; `DM_VK_CS_WARM=1` forces it on) the compute warm-up: after the startup prewarm, one background thread at nice 10 makes the pipelines of the shader library's compute shaders, cheapest first, before the game first dispatches them (`.heavy` shaders and retyped variants left out); the log's `compute warm-up:` line gives the counts [PEANUTS]
++DM_VK_CS_WARM	switch	`0`/`1` (Android, restart; 1 on Turnip, RADV and Samsung's Xclipse driver, 0 elsewhere; `DM_VK_CS_WARM=1` forces it on) the compute warm-up: after the startup prewarm, one background thread at nice 10 makes the pipelines of the shader library's compute shaders, cheapest first, before the game first dispatches them (`.heavy` shaders and retyped variants left out); the log's `compute warm-up:` line gives the counts [PEANUTS]
+ DM_VK_CS_WARM_MAX	switch	`=<n>` (Android, restart, 256) the compute warm-up (`DM_VK_CS_WARM`) leaves a library with more compute shaders than this alone (a game with thousands ran a phone out of GPU memory); `0` off [PEANUTS]
+ DM_VK_CS_WARM_STOP_MS	switch	`=<ms>` (Android, restart, 1000; `0` never) the compute warm-up (`DM_VK_CS_WARM`) stops after one build longer than this, as the rest (cheapest first) cost as much or more [PEANUTS]
+ DM_VK_DEVICE_FAULT	switch	`0` (Android, restart, 1) leaves `VK_EXT_device_fault` off; by default, on a device that has it, a lost device's fault report (the driver's description, the faulting GPU addresses and their kind, the vendor's codes) is printed after the `GPU hang` lines (`vka_dev.c` `fault_report`)
+@@ -690,7 +690,7 @@ DM_VK_PSO_PREP_MEM_MB	switch	`=<n>` (Android, restart, 10000) the RAM in MiB fro
+ DM_VK_PSO_PREP_THREADS	switch	`=<n>` (Android, restart, 4; 1 to 8) threads of the preparing step (`DM_VK_PSO_PREP`): Super Mario Odyssey's 20,740 programs took 123 s on 4 threads on an AYN Thor (Turnip) [PEANUTS]
+ DM_VK_PSO_SLOTS	switch	`=<n>` (Android, live: at the next refresh, 1 on Turnip (driverID `VK_DRIVER_ID_MESA_TURNIP`), 4 on other drivers; at most 8; `1` one at a time) background pipeline compiles that run at once at most; fewer while MemAvailable is under 2 GiB plus 512 MiB a compile, or the memory maps are near 75 % of vm.max_map_count (10,000 maps a compile), never fewer than one (`vka_psogate.h` vkpg_slots, vkpg_cap_default); not used with `DM_VK_PREWARM_OVERLAP=1`. One on Turnip because Mario Kart World lost the device there with 4 (open)
+ DM_VK_PUSH_DEDUP	switch	`0` (Android, live, 1) a push descriptor update equal to the last one of its bind point is pushed again instead of skipped
+-DM_VK_PUSH_DELTA	switch	`0` / `1` (Android, live; default `1` on Turnip (`VK_DRIVER_ID_MESA_TURNIP`) and Qualcomm (`VK_DRIVER_ID_QUALCOMM_PROPRIETARY`), `0` on other drivers) push descriptor updates write only the descriptors that changed since the last push of the same set; `0` pushes the whole set
++DM_VK_PUSH_DELTA	switch	`0` / `1` (Android, live; default `1` on Turnip (`VK_DRIVER_ID_MESA_TURNIP`), Qualcomm (`VK_DRIVER_ID_QUALCOMM_PROPRIETARY`) and RADV (`VK_DRIVER_ID_MESA_RADV`), `0` on other drivers) push descriptor updates write only the descriptors that changed since the last push of the same set; `0` pushes the whole set
+ DM_VK_QS_TRACE	diagnostic	`=<n>` (Android, restart, default 512; `0` off) keeps the last n events of the GPU-wait scheduler and the submissions (each submission taken, park, wait that held at once with the value it saw and its source, release, valve, replayed event signal, commit with its timeline signal, part split, event value the completion thread wrote, present, CPU fence wait, failed submit) and prints them oldest first when a GPU hang is declared (`vka_worker.c` "The GPU-wait trace"); nothing is logged otherwise
+ DM_VK_QUAD_SHFL	switch	`0` / `1` (Android, restart; default 1 on Turnip, 0 on other drivers (Qualcomm's untested)) a pixel shader's warp shuffles inside a quad (the translator's ShuffleXor / Shuffle helper with a constant index and a mask that keeps every source lane in its quad) become quad swaps and broadcasts (`vka_spv_quad_shfl`), which keep helper invocations: Turnip may end helper lanes before a plain shuffle reads them (Luigi's Mansion 3's coloured lines along triangle edges, #283) [PEANUTS]
+ DM_VK_RANGE_WATCH	diagnostic	`=<hex addr>[+<hex bytes>]` (Android, restart; default 16 bytes, at most 64) finds who writes those guest bytes whatever the path (a storage binding, a store through a loaded address, a copy, a fill, inline data): the GPU copies them before a submission's first dispatch or transfer and after each one, and each step that changed them is logged with its shader key or transfer (`range watch`), then what the CPU reads once the submission is done; draws show at the next step or the submission's end
+-- 
+2.43.0
+
