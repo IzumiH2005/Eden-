@@ -63,6 +63,12 @@ jeu là où il est : liste des fichiers, tables `.toc` de chaque superbundle et 
 thread par cœur. Le résultat est un zip dans `Download/PeanutsNova-modding/`, à envoyer pour le travail de conversion
 des mods PC. Les mods convertis sont des mods RomFS au format Switch, que Peanuts Native officiel importe (Mods).
 
+**Extraire…** (dans la fenêtre de l'analyse) copie hors du jeu les éléments dont le nom correspond à une expression
+régulière (ebx, res, et les chunks et le manifeste de leurs bundles), ainsi que les fichiers RomFS dont le chemin
+correspond (`Data/…`, `Patch/…`, 64 Mio au plus chacun), dans `Download/PeanutsNova-modding/<title ID>-items-<date>.zip`.
+Elle reprend l'index de la dernière analyse. L'expression par défaut prend ce qu'il faut pour convertir le pack de
+visages de ViP3eR (`tools/fbnx/facepack2nx.py`) ; `Download/PeanutsNova-modding/extract.txt` la remplace s'il existe.
+
 ## Installer et récupérer ses jeux
 
 1. Installer `peanuts-nova-0.1.9-a56.apk`, ouvrir **Peanuts Nova** et accorder l'accès à tous les fichiers.

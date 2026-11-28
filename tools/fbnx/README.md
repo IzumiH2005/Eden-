@@ -27,3 +27,35 @@ D'après le lecteur de Peanuts Native (`dm/gfx/tools/frostbite.py`, testé sur l
 4. **Écriture** : nouveaux blocs non compressés dans un `cas` ajouté, `.toc` modifiées, le tout dans un mod RomFS
    pour Eden. À vérifier : si le jeu contrôle la signature des `.toc` (sinon, patch de l'ExeFS nécessaire).
 5. **Conversion** d'un mod de visage PC vers ces formats.
+
+## Conversion des visages PC (FIFA Editor Tool) → Switch : où on en est (28/11/2026)
+
+| Outil | Rôle |
+|---|---|
+| `fetm.py` | lit un mod PC `.fifamod` (format « FETM » v3 du FIFA Editor Tool, décodé sur l'AIO FacePack de ViP3eR) : bundles, ebx, res, chunks et leurs données |
+| `fbblocks.py` | blocs Frostbite : décodage (Oodle via ooz) et écriture en blocs non compressés |
+| `nxtex.py` | textures Tegra X1 : swizzle block-linear (GOB 64 × 8, hauteur de bloc par niveau) |
+| `fbtoc.py` | lit et réécrit l'emplacement des éléments d'un bundle dans une `.toc` (réécriture identique vérifiée octet pour octet) |
+| `facepack2nx.py` | pack de visages PC → mod RomFS Switch pour Peanuts Native (Mods) ou Eden |
+
+Établi sur le vrai jeu (analyse Peanuts Nova) :
+
+- Les textures de visage Switch ont le **même format de blocs** que sur PC, en **demi-résolution** (512 au lieu de 1024)
+  et en block-linear : 512² BC1 sur 10 mips = 177 152 octets, 512² à blocs de 16 octets = 351 744, 256² = 89 600 ;
+  ce sont exactement les tailles des chunks de Saka dans le jeu. La conversion ne recompresse rien : elle prend les mips
+  PC à partir de 512 et les swizzle. L'en-tête de texture du jeu et le manifeste du bundle ne changent pas.
+- La `.toc` donne l'emplacement (fichier cas, décalage, taille) de chaque élément de chaque bundle : on redirige
+  les chunks d'une texture sans toucher au reste.
+- `layout.toc` énumère chaque fichier cas existant : un nouveau `cas_NN` n'y serait pas connu. Les nouvelles données vont
+  donc à la fin d'un petit cas existant, `Patch/NX/superbundlelayout/commentaryfull_eng_us/cas_01.cas` (4 Kio, toujours
+  installé), livré par le mod avec ses 4 Kio d'origine devant.
+- Les `.toc` sont signées (RSA, en-tête `00D1CE01`) : le mod de test (échange de deux textures de Saka dans la toc)
+  dit si le jeu accepte une toc modifiée.
+- Le pack de ViP3eR ajoute pour 43 joueurs une variation `var_1` (nouveaux bundles) : la conversion remplace leur
+  `var_0` du jeu. 31 autres visages sont des joueurs sans tête « star » sur Switch : il faudra ajouter des bundles.
+- Visage seulement par défaut (couleur, normal, specmask : le dépliage UV des têtes est commun) ; les textures de
+  cheveux (`--hair`) vont avec le maillage de cheveux du mod, que la Switch n'a pas.
+
+ooz (décodeur Oodle libre, https://github.com/powzix/ooz) en bibliothèque partagée :
+`g++ -O2 -fPIC -shared -w -fpermissive -o libooz.so kraken_lib.cpp lzna.cpp bitknit.cpp ooz_api.cpp`, avec un
+`ooz_api.cpp` qui exporte `extern "C" int ooz_decompress(src, src_len, dst, dst_len)` (appel de `Kraken_Decompress`).

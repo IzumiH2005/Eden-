@@ -27,7 +27,7 @@ STAGE="$HERE/stage-work"
 
 cd "$SRC/android/app"
 echo "sdk.dir=$ANDROID_HOME" > local.properties
-./gradlew --no-daemon -PnxApp=peanuts -PnxAppId=nova "-PnxLabel=Peanuts Nova" -PnxVersion=0.1.9 -PnxVersionCode=110 \
+./gradlew --no-daemon -PnxApp=peanuts -PnxAppId=nova "-PnxLabel=Peanuts Nova" -PnxVersion=0.1.9 -PnxVersionCode=114 \
    -PnxPackStage="$STAGE/stage" -PnxCpu=cortex-a720+nosve apk
 mkdir -p "$HERE/dist"
 cp out/nxnative-android-peanuts.apk "$HERE/dist/peanuts-nova-0.1.9-a56.apk"

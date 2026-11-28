@@ -1,0 +1,254 @@
+From 90be5c84b088bf80e86670c50abe07624d94141e Mon Sep 17 00:00:00 2001
+From: nova <nova@localhost>
+Date: Sat, 28 Nov 2026 11:07:02 +0000
+Subject: [PATCH] Peanuts Nova: Extract items (fc27probe extract) beside the
+ modding analysis
+
+---
+ .../dev/nxnative/android/MainActivity.java    | 40 +++++++++++-
+ .../nxnative/android/ModAnalysisService.java  | 65 +++++++++++++++++--
+ dm/tools/fc27probe.py                         | 51 ++++++++++-----
+ 3 files changed, 133 insertions(+), 23 deletions(-)
+
+diff --git a/android/app/src/main/java/dev/nxnative/android/MainActivity.java b/android/app/src/main/java/dev/nxnative/android/MainActivity.java
+index aa8df170..6a406e29 100644
+--- a/android/app/src/main/java/dev/nxnative/android/MainActivity.java
++++ b/android/app/src/main/java/dev/nxnative/android/MainActivity.java
+@@ -1585,9 +1585,47 @@ public final class MainActivity extends Activity {
+                     if (!started) android.widget.Toast.makeText(a, "Une analyse est déjà en cours : voici son avancement", android.widget.Toast.LENGTH_LONG).show();
+                     novaProgress(a);
+                 })
++                .setNeutralButton("Extraire…", (d, w) -> novaExtract(a, nup, titleId, name))
+                 .setNegativeButton("Annuler", null).show();
+     }
+ 
++    /** NOVA: the default of Extract: the faces the converted PC face pack replaces (textures), one player's whole head (Bukayo Saka), and the small cas file the converted mod adds its data to */
++    static final String NOVA_EXTRACT_RX = "^Patch/NX/superbundlelayout/commentaryfull_eng_us/cas_01\\.cas$|bukayo_saka_246669/|/(ilkay_gundogan_186942|romelu_lukaku_192505|inigo_martinez_204525|joao_cancelo_210514|aymeric_laporte_212218|bruno_fernandes_212198|youri_tielemans_216393|james_maddison_220697|martin_odegaard_222665|frenkie_dejong_228702|lautaro_martinez_231478|marcus_rashford_231677|raphael_diasbelloli_233419|declan_rice_234378|achraf_hakimi_235212|morgan_gibbswhite_236015|noussair_mazraoui_236401|dominik_szoboszlai_236772|reece_james_238074|vinicius_junior_238794|alexis_macallister_239837|jules_kounde_241486|dani_olmocarvajal_244260|eric_garciamartret_245037|xavi_simons_245367|julian_alvarez_246191|mykhailo_mudryk_246340|bukayo_saka_246669|cherki_rayan_251570|pedri_gonzalez_251854|jude_bellingham_252371|jeremie_frimpong_253149|elliot_anderson_254243|noni_madueke_254796|christos_tzolis_256948|riccardo_calafiori_257711|ismael_saibari_259480|benjamin_sesko_260592|gavi_264240|cher_ndour_276682|lopez_marin_fermin_277179|lamine_yamal_277643|ayyoub_bouaddi_278901)/var_0/(face|hair)_\\d+_0_0_(color|normal|specmask|coeff)$";
++
++    /** NOVA: "Extract items": the ebx / res whose name matches a regular expression (prefilled from Download/PeanutsNova-modding/extract.txt, else the default),
++     *  with the chunks and manifest of their bundles, into a zip in Download/PeanutsNova-modding (ModAnalysisService, fc27probe extract) */
++    public static void novaExtract(android.app.Activity a, File nup, String titleId, String name) {
++        String rx = NOVA_EXTRACT_RX;
++        try {
++            File f = new File(ModAnalysisService.outDir(), "extract.txt");
++            if (f.isFile()) { String t = new String(java.nio.file.Files.readAllBytes(f.toPath()), java.nio.charset.StandardCharsets.UTF_8).trim(); if (!t.isEmpty()) rx = t; }
++        } catch (java.io.IOException | RuntimeException ignored) { /* the default */ }
++        int pad = (int) (20 * a.getResources().getDisplayMetrics().density);
++        LinearLayout box = new LinearLayout(a); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(pad, pad / 2, pad, 0);
++        TextView text = new TextView(a);
++        text.setText("Copie hors du jeu les éléments dont le nom correspond à cette expression, avec les chunks et le manifeste de leurs bundles, et les fichiers dont le chemin correspond (Data/…, Patch/…). "
++                + "Utilise l'index de la dernière analyse (sinon le jeu est d'abord lu en entier). Le résultat est un zip dans Download/PeanutsNova-modding, à envoyer.");
++        android.widget.EditText edit = new android.widget.EditText(a);
++        edit.setText(rx); edit.setTextSize(12); edit.setMaxLines(6); edit.setSingleLine(false);
++        box.addView(text); box.addView(edit);
++        AlertDialog dlg = new AlertDialog.Builder(a).setTitle("Extraire des éléments du jeu").setView(box)
++                .setPositiveButton("Extraire", (d, w) -> {
++                    String r = edit.getText().toString().trim();
++                    try { java.util.regex.Pattern.compile(r); } catch (RuntimeException e) {
++                        android.widget.Toast.makeText(a, "Expression invalide : " + e.getMessage(), android.widget.Toast.LENGTH_LONG).show(); return;
++                    }
++                    if (android.os.Build.VERSION.SDK_INT >= 33 && a.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
++                        a.requestPermissions(new String[] {android.Manifest.permission.POST_NOTIFICATIONS}, 7301);
++                    boolean started = ModAnalysisService.start(a, nup, titleId, name, r);
++                    if (!started) android.widget.Toast.makeText(a, "Un travail est déjà en cours : voici son avancement", android.widget.Toast.LENGTH_LONG).show();
++                    novaProgress(a);
++                })
++                .setNeutralButton("Par défaut", null)
++                .setNegativeButton("Annuler", null).create();
++        dlg.setOnShowListener(x -> dlg.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> edit.setText(NOVA_EXTRACT_RX)));   // stays open
++        dlg.show();
++    }
++
+     /** NOVA: the analysis's progress in the app (ModAnalysisService's status file, read every second while the window is open) */
+     public static void novaProgress(android.app.Activity a) {
+         int pad = (int) (20 * a.getResources().getDisplayMetrics().density);
+@@ -1597,7 +1635,7 @@ public final class MainActivity extends Activity {
+         bar.setIndeterminate(true); bar.setMax(1000);
+         TextView sub = new TextView(a); sub.setTextSize(12); sub.setAlpha(0.7f);
+         box.addView(text); box.addView(bar); box.addView(sub);
+-        AlertDialog dlg = new AlertDialog.Builder(a).setTitle("Analyse pour le modding").setView(box)
++        AlertDialog dlg = new AlertDialog.Builder(a).setTitle("Modding").setView(box)
+                 .setPositiveButton("Fermer", null).setCancelable(true).create();
+         android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
+         long t0 = System.currentTimeMillis();
+diff --git a/android/app/src/ondevice/java/dev/nxnative/android/ModAnalysisService.java b/android/app/src/ondevice/java/dev/nxnative/android/ModAnalysisService.java
+index a8dc711c..f97d77b7 100644
+--- a/android/app/src/ondevice/java/dev/nxnative/android/ModAnalysisService.java
++++ b/android/app/src/ondevice/java/dev/nxnative/android/ModAnalysisService.java
+@@ -29,16 +29,21 @@ import java.util.Locale;
+ public final class ModAnalysisService extends Service {
+     private static final String TAG = "nxmod", CHANNEL = "nova_mod_analysis";
+     private static final int NOTE = 7301;
+-    static final String EXTRA_NUP = "nup", EXTRA_TITLE = "title", EXTRA_NAME = "name";
++    static final String EXTRA_NUP = "nup", EXTRA_TITLE = "title", EXTRA_NAME = "name", EXTRA_RX = "rx";
+     private static volatile boolean running;
+ 
+     /** Starts the analysis of nup (a game's .nup file) for title ID titleId named name; false when one already runs */
+-    public static boolean start(Context c, File nup, String titleId, String name) {
++    public static boolean start(Context c, File nup, String titleId, String name) { return start(c, nup, titleId, name, null); }
++
++    /** With rx: "Extract items" in place of the analysis (fc27probe extract: every ebx / res whose name matches rx, the chunks and manifest of their bundles), reusing
++     *  the last analysis's index when there is one */
++    public static boolean start(Context c, File nup, String titleId, String name, String rx) {
+         if (running) return false;
+         String[] st = readStatus(c);
+         if (st != null && (st[0].equals("running") || st[0].equals("starting")) && statusFile(c).lastModified() > System.currentTimeMillis() - 30_000) return false;
+-        writeStatus(c, "starting", 0, 0, "Démarrage du moteur d'analyse…");
++        writeStatus(c, "starting", 0, 0, rx == null ? "Démarrage du moteur d'analyse…" : "Démarrage de l'extraction…");
+         Intent i = new Intent(c, ModAnalysisService.class).putExtra(EXTRA_NUP, nup.getPath()).putExtra(EXTRA_TITLE, titleId).putExtra(EXTRA_NAME, name);
++        if (rx != null) i.putExtra(EXTRA_RX, rx);
+         c.startForegroundService(i);
+         return true;
+     }
+@@ -76,10 +81,10 @@ public final class ModAnalysisService extends Service {
+         if (intent == null || running) return START_NOT_STICKY;
+         running = true;
+         File nup = new File(intent.getStringExtra(EXTRA_NUP));
+-        String title = intent.getStringExtra(EXTRA_TITLE), name = intent.getStringExtra(EXTRA_NAME);
++        String title = intent.getStringExtra(EXTRA_TITLE), name = intent.getStringExtra(EXTRA_NAME), rx = intent.getStringExtra(EXTRA_RX);
+         try { startForeground(NOTE, note(name, "Starting", -1), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC); }
+         catch (RuntimeException e) { Log.w(TAG, "startForeground refused: " + e); }
+-        new Thread(() -> run(nup, title, name), "nova-mod-analysis").start();
++        new Thread(() -> { if (rx == null) run(nup, title, name); else extract(nup, title, name, rx); }, "nova-mod-analysis").start();
+         return START_NOT_STICKY;
+     }
+ 
+@@ -125,6 +130,50 @@ public final class ModAnalysisService extends Service {
+         stopSelf();
+     }
+ 
++    /** fc27probe extract into the analysis's own folder (its index.tsv.gz kept from the last analysis; made first when missing), items.zip out to Download */
++    private void extract(File nup, String title, String name, String rx) {
++        String stamp = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(new Date());
++        File work = new File(getCacheDir(), "mod-analysis"), log = new File(work, "extract.log");
++        boolean ok = false; String msg;
++        try {
++            if (!work.isDirectory() && !work.mkdirs()) throw new IOException("cannot make " + work);
++            new File(work, "items.zip").delete(); log.delete();
++            if (!log.createNewFile()) throw new IOException("cannot make " + log);
++            PackNative.context(this);
++            writeStatus(this, "running", 0, 0, new File(work, "index.tsv.gz").isFile() ? "Recherche des éléments dans l'index…"
++                    : "Pas encore d'index : lecture des archives du jeu d'abord…");
++            final boolean[] done = {false};
++            Thread watch = new Thread(() -> watch(log, name, done), "nova-mod-analysis-progress");
++            watch.start();
++            int code = PackNative.packRun("dm/tools/fc27probe.py", new String[] {"extract", nup.getPath(), work.getPath(), rx}, log.getPath());
++            done[0] = true;
++            File zip = new File(work, "items.zip");
++            if (code != 0 || !zip.isFile()) throw new IOException("the extraction stopped (code " + code + "): " + tail(log));
++            File dir = outDir();
++            if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("cannot make " + dir);
++            File to = new File(dir, title + "-items-" + stamp + ".zip");
++            Files.copy(zip.toPath(), to.toPath(), StandardCopyOption.REPLACE_EXISTING);
++            Files.copy(log.toPath(), new File(dir, title + "-items-" + stamp + ".log").toPath(), StandardCopyOption.REPLACE_EXISTING);
++            ok = true;
++            msg = "Terminé : Download/PeanutsNova-modding/" + to.getName() + " (" + Math.max(1, to.length() >> 20) + " Mo). Envoie ce fichier.";
++            writeStatus(this, "done", 1, 1, msg);
++        } catch (IOException | RuntimeException | LinkageError e) {
++            Log.e(TAG, "extraction failed", e);
++            msg = "Échec : " + e.getMessage() + " (le .log est dans Download/PeanutsNova-modding)";
++            writeStatus(this, "failed", 0, 0, msg);
++            try {
++                File dir = outDir(); dir.mkdirs();
++                if (log.isFile()) Files.copy(log.toPath(), new File(dir, title + "-items-" + stamp + "-failed.log").toPath(), StandardCopyOption.REPLACE_EXISTING);
++            } catch (IOException | RuntimeException ignored) { /* the notification says it */ }
++        }
++        stopForeground(STOP_FOREGROUND_DETACH);
++        nm.notify(NOTE + 1, new Notification.Builder(this, CHANNEL).setSmallIcon(ok ? android.R.drawable.stat_sys_download_done : android.R.drawable.stat_notify_error)
++                .setContentTitle((ok ? "Extraction: " : "Extraction failed: ") + name).setContentText(msg)
++                .setStyle(new Notification.BigTextStyle().bigText(msg)).setAutoCancel(true).build());
++        running = false;
++        stopSelf();
++    }
++
+     /** Follows the tool's "progress <done> <total> <stage>" lines into the notification */
+     private void watch(File log, String name, boolean[] done) {
+         long pos = 0;
+@@ -139,8 +188,10 @@ public final class ModAnalysisService extends Service {
+                     if (last != null) {
+                         String[] p = last.split(" ");
+                         long d = Long.parseLong(p[1]), t = Math.max(1, Long.parseLong(p[2]));
+-                        nm.notify(NOTE, note(name, "Lecture des archives : " + d + " / " + t + " bundles", (int) (100 * d / t)));
+-                        writeStatus(this, "running", d, t, "Lecture des archives du jeu : " + d + " / " + t + " bundles");
++                        boolean ex = p.length > 3 && p[3].equals("extract");
++                        String what = ex ? "Extraction : " + d + " / " + t + " éléments" : "Lecture des archives du jeu : " + d + " / " + t + " bundles";
++                        nm.notify(NOTE, note(name, what, (int) (100 * d / t)));
++                        writeStatus(this, "running", d, t, what);
+                     }
+                 }
+             } catch (InterruptedException e) { return; } catch (IOException | RuntimeException ignored) { /* the next second tries again */ }
+diff --git a/dm/tools/fc27probe.py b/dm/tools/fc27probe.py
+index e9270668..f9193830 100644
+--- a/dm/tools/fc27probe.py
++++ b/dm/tools/fc27probe.py
+@@ -11,7 +11,8 @@ small parts modding work needs, so nothing of the 31.8 GB game has to leave the
+       tables and index (one thread per core), then modding.zip holding both: what Peanuts Nova's "Analyse for modding" runs
+   python fc27probe.py extract <game.nup | dump folder> <out folder> <regex>
+       the stored bytes (still Oodle-compressed blocks) of every ebx / res whose name matches regex, and of the chunks their bundles list, as found in
+-      index.tsv.gz (run index first): items/<kind>/<name>.blocks
++      index.tsv.gz (made first when out has none): items/<kind>/<name>.blocks, each matching bundle's manifest (items/manifest/), items.tsv,
++      and every RomFS file whose path (Data/..., Patch/...) matches, up to 64 MiB each: files/<path>
+ 
+ The .nup is read with Peanuts Native's own reader (nup.py, beside this file, GPL-3.0-or-later), which needs a zstd module: Python 3.14's
+ compression.zstd, else `pip install backports.zstd`. Frostbite formats after Peanuts Native's dm/gfx/tools/frostbite.py.
+@@ -204,23 +205,43 @@ def cmd_all(src, out):
+ 
+ 
+ def cmd_extract(src, out, rx):
+-    rx = re.compile(rx); want = []
+-    with gzip.open(os.path.join(out, "index.tsv.gz"), "rt") as f:
+-        next(f)
+-        rows = [l.rstrip("\n").split("\t") for l in f]
+-    hit = {(r[0], r[1]) for r in rows if r[2] in ("ebx", "res") and rx.search(r[3])}
+-    for r in rows:
+-        if (r[0], r[1]) in hit and (r[2] == "chunk" or rx.search(r[3])): want.append(r)
+-    seen = set()
++    """streams index.tsv.gz twice (it has millions of rows: never all in memory); runs `all` first when out has no index"""
++    rx = re.compile(rx); idx = os.path.join(out, "index.tsv.gz")
++    if not os.path.isfile(idx):
++        print("no index.tsv.gz yet: reading the game's archives first", flush=True); cmd_all(src, out)
++    def rows():
++        with gzip.open(idx, "rt") as f:
++            next(f)
++            for l in f: yield l.rstrip("\n").split("\t")
++    hit = set()
++    for r in rows():
++        if r[2] in ("ebx", "res") and rx.search(r[3]): hit.add((r[0], r[1]))
++    want = [r for r in rows() if (r[0], r[1]) in hit and (r[2] == "chunk" or rx.search(r[3]))]
++    print(f"{len(hit)} bundles, {len(want)} items match", flush=True)
++    seen, total = set(), len(want)
+     with zipfile.ZipFile(os.path.join(out, "items.zip"), "w", zipfile.ZIP_DEFLATED) as z:
+-        for r in sorted(want, key=lambda r: (r[6], int(r[7]))):
++        for i, r in enumerate(sorted(want, key=lambda r: (r[6], int(r[7])))):
+             key = (r[2], r[3])
+-            if key in seen: continue
+-            seen.add(key)
+-            with src.open(r[6]) as f:
+-                f.seek(int(r[7])); z.writestr(f"items/{r[2]}/{r[3].replace('/', '~')}.blocks", f.read(int(r[8])))
++            if key not in seen:
++                seen.add(key)
++                with src.open(r[6]) as f:
++                    f.seek(int(r[7])); z.writestr(f"items/{r[2]}/{r[3].replace('/', '~')}.blocks", f.read(int(r[8])))
++            if i % 20 == 0: print(f"progress {i} {total} extract", flush=True)
++        chunks = install_chunks(src); tocd = {}
++        for t, bi in sorted(hit):
++            if t not in tocd: tocd[t] = toc_bundles(src.read(t), t)
++            cid, off, size = tocd[t][int(bi)][0]
++            with src.open(cas_rel(cid, chunks)) as f:
++                f.seek(off); z.writestr(f"items/manifest/{t.replace('/', '~')}~{bi}.bin", f.read(size))
++        nf = 0
++        for rel, size, _ in src.files():   # RomFS files the expression names too (by their path: Data/..., Patch/...), up to 64 MiB each
++            if rx.search(rel) and (rel.startswith("Data/") or rel.startswith("Patch/")) and size <= 64 << 20:
++                z.writestr(f"files/{rel}", src.read(rel)); nf += 1
++        print(f"{nf} RomFS files", flush=True)
+         z.writestr("items.tsv", "".join("\t".join(r) + "\n" for r in want))
+-    print(f"{len(seen)} items -> {os.path.join(out, 'items.zip')}")
++        z.writestr("regex.txt", rx.pattern)
++    print(f"progress {total} {total} extract", flush=True)
++    print(f"{len(seen)} items, {len(hit)} manifests -> {os.path.join(out, 'items.zip')}", flush=True)
+ 
+ 
+ def main():
+-- 
+2.43.0
+

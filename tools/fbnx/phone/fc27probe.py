@@ -11,7 +11,8 @@ small parts modding work needs, so nothing of the 31.8 GB game has to leave the 
       tables and index (one thread per core), then modding.zip holding both: what Peanuts Nova's "Analyse for modding" runs
   python fc27probe.py extract <game.nup | dump folder> <out folder> <regex>
       the stored bytes (still Oodle-compressed blocks) of every ebx / res whose name matches regex, and of the chunks their bundles list, as found in
-      index.tsv.gz (run index first): items/<kind>/<name>.blocks
+      index.tsv.gz (made first when out has none): items/<kind>/<name>.blocks, each matching bundle's manifest (items/manifest/), items.tsv,
+      and every RomFS file whose path (Data/..., Patch/...) matches, up to 64 MiB each: files/<path>
 
 The .nup is read with Peanuts Native's own reader (nup.py, beside this file, GPL-3.0-or-later), which needs a zstd module: Python 3.14's
 compression.zstd, else `pip install backports.zstd`. Frostbite formats after Peanuts Native's dm/gfx/tools/frostbite.py.
@@ -204,23 +205,43 @@ def cmd_all(src, out):
 
 
 def cmd_extract(src, out, rx):
-    rx = re.compile(rx); want = []
-    with gzip.open(os.path.join(out, "index.tsv.gz"), "rt") as f:
-        next(f)
-        rows = [l.rstrip("\n").split("\t") for l in f]
-    hit = {(r[0], r[1]) for r in rows if r[2] in ("ebx", "res") and rx.search(r[3])}
-    for r in rows:
-        if (r[0], r[1]) in hit and (r[2] == "chunk" or rx.search(r[3])): want.append(r)
-    seen = set()
+    """streams index.tsv.gz twice (it has millions of rows: never all in memory); runs `all` first when out has no index"""
+    rx = re.compile(rx); idx = os.path.join(out, "index.tsv.gz")
+    if not os.path.isfile(idx):
+        print("no index.tsv.gz yet: reading the game's archives first", flush=True); cmd_all(src, out)
+    def rows():
+        with gzip.open(idx, "rt") as f:
+            next(f)
+            for l in f: yield l.rstrip("\n").split("\t")
+    hit = set()
+    for r in rows():
+        if r[2] in ("ebx", "res") and rx.search(r[3]): hit.add((r[0], r[1]))
+    want = [r for r in rows() if (r[0], r[1]) in hit and (r[2] == "chunk" or rx.search(r[3]))]
+    print(f"{len(hit)} bundles, {len(want)} items match", flush=True)
+    seen, total = set(), len(want)
     with zipfile.ZipFile(os.path.join(out, "items.zip"), "w", zipfile.ZIP_DEFLATED) as z:
-        for r in sorted(want, key=lambda r: (r[6], int(r[7]))):
+        for i, r in enumerate(sorted(want, key=lambda r: (r[6], int(r[7])))):
             key = (r[2], r[3])
-            if key in seen: continue
-            seen.add(key)
-            with src.open(r[6]) as f:
-                f.seek(int(r[7])); z.writestr(f"items/{r[2]}/{r[3].replace('/', '~')}.blocks", f.read(int(r[8])))
+            if key not in seen:
+                seen.add(key)
+                with src.open(r[6]) as f:
+                    f.seek(int(r[7])); z.writestr(f"items/{r[2]}/{r[3].replace('/', '~')}.blocks", f.read(int(r[8])))
+            if i % 20 == 0: print(f"progress {i} {total} extract", flush=True)
+        chunks = install_chunks(src); tocd = {}
+        for t, bi in sorted(hit):
+            if t not in tocd: tocd[t] = toc_bundles(src.read(t), t)
+            cid, off, size = tocd[t][int(bi)][0]
+            with src.open(cas_rel(cid, chunks)) as f:
+                f.seek(off); z.writestr(f"items/manifest/{t.replace('/', '~')}~{bi}.bin", f.read(size))
+        nf = 0
+        for rel, size, _ in src.files():   # RomFS files the expression names too (by their path: Data/..., Patch/...), up to 64 MiB each
+            if rx.search(rel) and (rel.startswith("Data/") or rel.startswith("Patch/")) and size <= 64 << 20:
+                z.writestr(f"files/{rel}", src.read(rel)); nf += 1
+        print(f"{nf} RomFS files", flush=True)
         z.writestr("items.tsv", "".join("\t".join(r) + "\n" for r in want))
-    print(f"{len(seen)} items -> {os.path.join(out, 'items.zip')}")
+        z.writestr("regex.txt", rx.pattern)
+    print(f"progress {total} {total} extract", flush=True)
+    print(f"{len(seen)} items, {len(hit)} manifests -> {os.path.join(out, 'items.zip')}", flush=True)
 
 
 def main():
