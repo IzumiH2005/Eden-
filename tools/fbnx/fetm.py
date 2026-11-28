@@ -36,10 +36,14 @@ class Mod:
         r = R(d, 5)
         self.game = r.s7(); r.p += 7   # then 7 bytes (the game's version...)
         self.title = r.s7(); self.author = r.s7(); r.p += 2; self.category = r.s7()
-        jpg = d.find(b"\xff\xd8\xff", r.p)   # the thumbnail, after a 7-bit length: the strings before it vary (links)
-        for k in range(1, 5):
-            n = R(d, jpg - k).vi()
-            if d[jpg + n - 2:jpg + n] == b"\xff\xd9": break
+        # the thumbnail (JPEG or PNG), after a 7-bit length: the strings before it vary (links)
+        cands = [(d.find(b"\xff\xd8\xff", r.p), b"\xff\xd9", 0), (d.find(b"\x89PNG", r.p), b"IEND", 4)]
+        for jpg, tail, extra in sorted(c for c in cands if c[0] >= 0):
+            for k in range(1, 5):
+                n = R(d, jpg - k).vi()
+                if d[jpg + n - len(tail) - extra:jpg + n - extra] == tail: break
+            else: continue
+            break
         else: raise ValueError(f"{path}: no thumbnail length")
         end = jpg + n   # then u64, 6 zero bytes, u32 data base, u32 file size, 6 zero bytes
         self.base, self.size = struct.unpack_from("<II", d, end + 14)
@@ -63,9 +67,9 @@ class Mod:
     def _ebx(self, r):
         e = {"name": r.s7(), "flags": r.u8()}
         if e["flags"] & ~0x34: raise ValueError(f"ebx flags {e['flags']:#x} at {r.p:#x}")
-        if e["flags"] & 0x10: e["sha1"] = r.raw(20).hex(); e["off"] = r.vi(); e["stored"] = r.vi(); e["size"] = r.vi()
+        e["sha1"] = r.raw(20).hex(); e["off"] = r.vi(); e["stored"] = r.vi(); e["size"] = r.vi()
         if e["flags"] & 0x04: e["handler"] = r.raw(4).hex(); e["link"] = r.s7()
-        e["bundles"] = self._bundles(r)
+        e["bundles"] = self._bundles(r) if e["flags"] & 0x10 else []   # 0x10: an added asset (its bundles follow); 0: a modified one
         return e
 
     def _res(self, r):
@@ -82,8 +86,13 @@ class Mod:
     def _chunk(self, r):
         c = {"id": r.raw(16).hex(), "sha1": r.raw(20).hex(), "flags": r.u8()}
         c["first_mip"] = r.vi() if c["flags"] & 0x80 else None
-        if not c["flags"] & 0x20:
-            c["ref"] = (r.u8(), r.raw(4).hex(), r.vi(), r.vi()); return c
+        if not c["flags"] & 0x20:   # a modified chunk: u8, then (0x10) its data, else two varints (data shared with another entry?)
+            c["u8"] = r.u8(); c["bundles"] = []
+            if c["flags"] & 0x10: c["off"] = r.vi(); c["stored"] = r.vi(); c["size"] = r.vi()
+            else: c["ref"] = (r.vi(), r.vi())
+            if c["flags"] & 0x02: c["legacy_hash"] = r.raw(8).hex(); c["legacy"] = r.s7()   # a legacy file (chunkfiles: xml, .big...)
+            if c["flags"] & 0x04: c["handler"] = r.raw(4).hex()
+            return c
         c["off"] = r.vi(); c["stored"] = r.vi(); c["size"] = r.vi(); c["x"] = r.raw(8).hex()
         c["bundles"] = self._bundles(r)
         if c["flags"] & 0x04: c["handler"] = r.raw(4).hex()
