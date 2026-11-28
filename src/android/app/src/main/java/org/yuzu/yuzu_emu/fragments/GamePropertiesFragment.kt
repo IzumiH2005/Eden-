@@ -11,6 +11,7 @@ import android.provider.DocumentsContract
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.EditText
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.ViewCompat
@@ -23,6 +24,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.navigation.findNavController
 import androidx.navigation.fragment.navArgs
 import androidx.recyclerview.widget.StaggeredGridLayoutManager
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.transition.MaterialSharedAxis
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -388,6 +390,15 @@ class GamePropertiesFragment : Fragment() {
             }
 
             if (!args.game.isHomebrew) {
+                // EdEn.claude: chosen game files (RomFS with the update, ExeFS, byte ranges) into a zip, for modding work
+                add(
+                    SubmenuProperty(
+                        R.string.extract_game_files,
+                        R.string.extract_game_files_description,
+                        R.drawable.ic_export,
+                        action = { askExtractFilters() }
+                    )
+                )
                 add(
                     InstallableProperty(
                         R.string.save_data,
@@ -628,6 +639,64 @@ class GamePropertiesFragment : Fragment() {
                 }
             }.show(parentFragmentManager, ProgressDialogFragment.TAG)
         }
+
+    // EdEn.claude: game file extraction (NativeLibrary.exportGameFiles). The filter list is kept between uses
+    private var extractFilters: String = ""
+
+    private fun askExtractFilters() {
+        val prefs = requireContext().getSharedPreferences("eden_claude", android.content.Context.MODE_PRIVATE)
+        val input = EditText(requireContext()).apply {
+            setText(prefs.getString("extract_filters", getString(R.string.extract_game_files_default)))
+            minLines = 6
+            setHorizontallyScrolling(true)
+            typeface = android.graphics.Typeface.MONOSPACE
+            textSize = 12f
+        }
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(R.string.extract_game_files)
+            .setMessage(R.string.extract_game_files_help)
+            .setView(input)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                extractFilters = input.text.toString()
+                prefs.edit().putString("extract_filters", extractFilters).apply()
+                exportGameFiles.launch("${args.game.programIdHex}-files.zip")
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private val exportGameFiles = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip")
+    ) { result ->
+        if (result == null) {
+            return@registerForActivityResult
+        }
+        ProgressDialogFragment.newInstance(
+            requireActivity(),
+            R.string.extract_game_files_running,
+            false
+        ) { _, _ ->
+            val tmp = File(requireContext().cacheDir, "game-files")
+            tmp.deleteRecursively()
+            val report = NativeLibrary.exportGameFiles(args.game.path, extractFilters, tmp.path)
+            if (report.startsWith("error:")) {
+                tmp.deleteRecursively()
+                return@newInstance report
+            }
+            File(tmp, "report.txt").writeText(report)
+            val zipResult = FileUtil.zipFromInternalStorage(
+                tmp,
+                tmp.path + "/",
+                BufferedOutputStream(requireContext().contentResolver.openOutputStream(result)),
+                compression = true
+            )
+            tmp.deleteRecursively()
+            return@newInstance when (zipResult) {
+                TaskState.Completed -> report
+                TaskState.Cancelled, TaskState.Failed -> getString(R.string.export_failed)
+            }
+        }.show(parentFragmentManager, ProgressDialogFragment.TAG)
+    }
 
     /**
      * Exports the save file located in the given folder path by creating a zip file and opening a

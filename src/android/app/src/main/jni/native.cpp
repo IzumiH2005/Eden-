@@ -7,7 +7,10 @@
 #define VMA_IMPLEMENTATION
 #include "video_core/vulkan_common/vma.h"
 
+#include <algorithm>
 #include <codecvt>
+#include <filesystem>
+#include <fstream>
 #include <cstdio>
 #include <cstring>
 #include <locale>
@@ -31,6 +34,7 @@
 #include <android/native_window_jni.h>
 #include <common/fs/fs.h>
 #include <core/file_sys/patch_manager.h>
+#include <core/file_sys/registered_cache.h>
 #include <core/file_sys/savedata_factory.h>
 #include <core/loader/nro.h>
 #include <frontend_common/content_manager.h>
@@ -2148,6 +2152,137 @@ JNIEXPORT jbyteArray JNICALL Java_org_yuzu_yuzu_1emu_NativeLibrary_getFirmwareAv
     }
 
     return nullptr;
+}
+
+// EdEn.claude: copy chosen files of a game's RomFS (with its update applied) and ExeFS, or byte ranges of them, into a folder,
+// for modding work on a computer without dumping the whole game. filters: one line each, "romfs/<glob>" or "exefs/<glob>"
+// (* within a folder, ** across folders, ? one character), optionally "@<offset>+<size>" (decimal or 0x hex) for a range,
+// which is written as "<path>@<offset>+<size>". listing.txt names every file of both with its size. Returns a report.
+static bool EdenClaudeGlob(std::string_view p, std::string_view s) {
+    if (p.empty()) return s.empty();
+    if (p.substr(0, 2) == "**") {
+        p.remove_prefix(2);
+        for (size_t i = 0; i <= s.size(); ++i)
+            if (EdenClaudeGlob(p, s.substr(i))) return true;
+        return false;
+    }
+    if (p[0] == '*') {
+        p.remove_prefix(1);
+        for (size_t i = 0; i <= s.size(); ++i) {
+            if (EdenClaudeGlob(p, s.substr(i))) return true;
+            if (i < s.size() && s[i] == '/') break;
+        }
+        return false;
+    }
+    if (s.empty() || (p[0] == '?' ? s[0] == '/' : p[0] != s[0])) return false;
+    return EdenClaudeGlob(p.substr(1), s.substr(1));
+}
+
+static void EdenClaudeWalk(const FileSys::VirtualDir& dir, const std::string& prefix,
+                           std::vector<std::pair<std::string, FileSys::VirtualFile>>& out) {
+    if (!dir) return;
+    for (const auto& f : dir->GetFiles()) out.emplace_back(prefix + f->GetName(), f);
+    for (const auto& d : dir->GetSubdirectories()) EdenClaudeWalk(d, prefix + d->GetName() + "/", out);
+}
+
+static bool EdenClaudeCopy(const FileSys::VirtualFile& f, u64 off, u64 size, const std::filesystem::path& to) {
+    std::error_code ec;
+    std::filesystem::create_directories(to.parent_path(), ec);
+    std::ofstream o(to, std::ios::binary | std::ios::trunc);
+    if (!o) return false;
+    std::vector<u8> buf(4u << 20);
+    const u64 end = std::min<u64>(off + size, f->GetSize());
+    while (off < end) {
+        const size_t n = static_cast<size_t>(std::min<u64>(buf.size(), end - off));
+        const size_t r = f->Read(buf.data(), n, static_cast<size_t>(off));
+        if (r == 0) return false;
+        o.write(reinterpret_cast<const char*>(buf.data()), static_cast<std::streamsize>(r));
+        off += r;
+    }
+    return static_cast<bool>(o);
+}
+
+JNIEXPORT jstring JNICALL Java_org_yuzu_yuzu_1emu_NativeLibrary_exportGameFiles(JNIEnv* env, jobject jobj,
+                                                                              jstring jpath, jstring jfilters,
+                                                                              jstring jout) {
+    auto& system = EmulationSession::GetInstance().System();
+    const std::string path = Common::Android::GetJString(env, jpath);
+    const std::string filters = Common::Android::GetJString(env, jfilters);
+    const std::filesystem::path out_dir{Common::Android::GetJString(env, jout)};
+    const auto fail = [env](const std::string& why) { return Common::Android::ToJString(env, "error: " + why); };
+
+    const auto file = Core::GetGameFileFromPath(system.GetFilesystem(), path);
+    const auto loader = file ? Loader::GetLoader(system, file, 0, 0) : nullptr;
+    if (!loader) return fail("the game file cannot be opened");
+    u64 program_id{};
+    loader->ReadProgramId(program_id);
+    FileSys::VirtualFile packed_update_raw{};
+    loader->ReadUpdateRaw(packed_update_raw);
+    const auto& provider = system.GetContentProvider();
+    const auto base_nca = provider.GetEntry(program_id, FileSys::ContentRecordType::Program);
+    if (!base_nca) return fail(fmt::format("no program NCA for {:016X}", program_id));
+    const FileSys::NCA update_nca{packed_update_raw, nullptr};
+    if (update_nca.GetStatus() != Loader::ResultStatus::ErrorMissingBKTRBaseRomFS ||
+        update_nca.GetTitleId() != FileSys::GetUpdateTitleID(program_id)) {
+        packed_update_raw = {};
+    }
+    const FileSys::PatchManager pm{program_id, system.GetFileSystemController(), provider};
+    const auto romfs = pm.PatchRomFS(base_nca.get(), base_nca->GetRomFS(), FileSys::ContentRecordType::Program,
+                                     packed_update_raw, false);
+    const auto romfs_dir = romfs ? FileSys::ExtractRomFS(romfs) : nullptr;
+    const auto exefs_dir = pm.PatchExeFS(base_nca->GetExeFS());
+
+    std::vector<std::pair<std::string, FileSys::VirtualFile>> files;
+    EdenClaudeWalk(romfs_dir, "romfs/", files);
+    EdenClaudeWalk(exefs_dir, "exefs/", files);
+
+    std::error_code ec;
+    std::filesystem::create_directories(out_dir, ec);
+    {
+        std::ofstream l(out_dir / "listing.txt", std::ios::trunc);
+        l << fmt::format("{:016X}\n", program_id);
+        for (const auto& [name, f] : files) l << name << '\t' << f->GetSize() << '\n';
+    }
+
+    std::string report = fmt::format("{:016X}: {} files in RomFS and ExeFS\n", program_id, files.size());
+    u64 total = 0;
+    size_t written = 0;
+    std::istringstream lines{filters};
+    for (std::string line; std::getline(lines, line);) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) line.pop_back();
+        const auto first = line.find_first_not_of(" \t");
+        if (first == std::string::npos || line[first] == '#') continue;
+        line = line.substr(first);
+        std::string pattern = line;
+        bool ranged = false;
+        u64 off = 0, size = 0;
+        if (const auto at = line.find('@'); at != std::string::npos) {
+            const auto plus = line.find('+', at);
+            if (plus == std::string::npos) { report += "bad range: " + line + "\n"; continue; }
+            try {
+                off = std::stoull(line.substr(at + 1, plus - at - 1), nullptr, 0);
+                size = std::stoull(line.substr(plus + 1), nullptr, 0);
+            } catch (...) { report += "bad range: " + line + "\n"; continue; }
+            pattern = line.substr(0, at);
+            ranged = true;
+        }
+        size_t matched = 0;
+        for (const auto& [name, f] : files) {
+            if (!EdenClaudeGlob(pattern, name)) continue;
+            ++matched;
+            const u64 o = ranged ? off : 0;
+            const u64 n = ranged ? size : f->GetSize();
+            if (o >= f->GetSize()) { report += name + ": range past the end\n"; continue; }
+            const u64 len = std::min<u64>(n, f->GetSize() - o);
+            if (total + len > (8ull << 30)) { report += "stopped: more than 8 GiB asked\n"; return Common::Android::ToJString(env, report); }
+            const auto to = out_dir / (ranged ? fmt::format("{}@{:#x}+{:#x}", name, o, len) : name);
+            if (EdenClaudeCopy(f, o, len, to)) { total += len; ++written; }
+            else report += name + ": copy failed\n";
+        }
+        if (!matched) report += "nothing matches " + line + "\n";
+    }
+    report += fmt::format("{} copies, {:.1f} MiB", written, total / 1048576.0);
+    return Common::Android::ToJString(env, report);
 }
 
 JNIEXPORT jbyteArray JNICALL Java_org_yuzu_yuzu_1emu_NativeLibrary_getDefaultAccountBackupJpeg(

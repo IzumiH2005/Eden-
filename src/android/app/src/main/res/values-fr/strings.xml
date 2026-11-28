@@ -1131,4 +1131,10 @@
     <string name="share_shader_cache_missing">Aucun cache de shaders trouvé</string>
     <string name="texture_min_lod">Niveau de détail minimal des textures</string>
     <string name="texture_min_lod_description">N\'utilise jamais les N niveaux les plus détaillés des textures (0 = désactivé). Textures plus floues de près. Contournement pour les corruptions qui apparaissent en s\'approchant des personnages. Relancez le jeu après modification.</string>
+
+    <!-- EdEn.claude: extraction de fichiers du jeu -->
+    <string name="extract_game_files">Extraire des fichiers du jeu</string>
+    <string name="extract_game_files_description">Copie des fichiers choisis du jeu (RomFS avec sa mise à jour, ExeFS) dans un zip, pour le modding</string>
+    <string name="extract_game_files_help">Un fichier par ligne : romfs/&lt;chemin&gt; ou exefs/&lt;chemin&gt;. * remplace un nom dans un dossier, ** traverse les dossiers. Ajoute @début+taille (décimal ou hexadécimal 0x) pour ne copier qu\'une partie d\'un fichier. listing.txt, dans le zip, liste tous les fichiers du jeu.</string>
+    <string name="extract_game_files_running">Extraction des fichiers du jeu…</string>
 </resources>

@@ -1812,4 +1812,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     <string name="add_folders">Add Folder</string>
     <string name="percent">%1$d%%</string>
 
+
+    <!-- EdEn.claude: game file extraction -->
+    <string name="extract_game_files">Extract game files</string>
+    <string name="extract_game_files_description">Copy chosen files of the game (RomFS with its update, ExeFS) into a zip, for modding work</string>
+    <string name="extract_game_files_help">One line per file: romfs/&lt;path&gt; or exefs/&lt;path&gt;. * matches within a folder, ** across folders. Add @offset+size (decimal or 0x hex) to copy only a part of a file. listing.txt in the zip names every file of the game.</string>
+    <string name="extract_game_files_running">Extracting game files…</string>
+    <string name="extract_game_files_default" translatable="false">romfs/Data/layout.toc\nromfs/Patch/layout.toc\nromfs/Data/initfs_NX\nromfs/**.toc\nexefs/main.npdm</string>
 </resources>

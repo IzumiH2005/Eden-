@@ -587,6 +587,13 @@ object NativeLibrary {
     ): Int
 
     /**
+     * EdEn.claude: copies chosen files of a game's RomFS (its update applied) and ExeFS, or byte ranges of them, into outDir,
+     * with listing.txt naming every file. filters: lines of "romfs/<glob>" or "exefs/<glob>", optionally "@<offset>+<size>".
+     * Returns a report (starting with "error:" when the game cannot be read).
+     */
+    external fun exportGameFiles(path: String, filters: String, outDir: String): String
+
+    /**
      * Gets the save location for a specific game
      *
      * @param programId String representation of a game's program ID
