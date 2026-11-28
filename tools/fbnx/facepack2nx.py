@@ -5,8 +5,8 @@ For each player the pack and the Switch game both have a face for (the pack's va
 (color, normal, specmask; --hair adds the hair's color and coeff) is rebuilt in the Switch's own layout: the PC mip chain from the Switch's
 size down (the Switch keeps half the PC's resolution, same block format), each level swizzled to the Tegra X1's block-linear layout
 (nxtex.py), so the chunk keeps exactly the size, format and header the game expects; the game's res header and manifest stay as they are.
-The new chunks go, as stored blocks, at the end of a small cas file the game always mounts (its original bytes kept in front), and the
-superbundle .toc of each bundle that lists them points there (fbtoc.py).
+The new chunks go, as stored blocks, at the end of a small cas file the game always mounts (its original bytes kept in front); the
+superbundle .tocs point there: their own chunk table (where the game looks a chunk up by GUID) and the bundles that list it (fbtoc.py).
 
   python facepack2nx.py <pack.fifamod> <analysis folder> <items.zip> <out.zip> [--hair] [--only name,name] [--cas <file>]
 
@@ -94,6 +94,7 @@ def main():
     elif "files/" + CAS in names: cas = bytearray(z.read("files/" + CAS))
     else: raise SystemExit(f"items.zip has no files/{CAS}: extract it too, or give it with --cas")
     relocate = {}   # (toc, bundle) -> {record index: (offset, stored)}
+    new_chunks = {}   # GUID -> (offset, stored) in the cas
     done = 0
     for folder, pc_name, nx_name, pc, nx in todo:
         pch = tex_header(mod.data(pc))
@@ -121,14 +122,30 @@ def main():
         while len(cas) % 16: cas.append(0)
         off = len(cas); cas += stored
         for key, i in locs: relocate.setdefault(key, {})[i] = (off, len(stored))
+        new_chunks[nx["chunk"]] = (off, len(stored))
         done += 1
         print(f"  {folder}: {nx_name.rsplit('/', 1)[1]} {nx['w']}x{nx['h']} {nx['mips']} mips, format PC {pch['format']:#x} / Switch {nx['format']:#x} -> {len(locs)} bundle(s)")
 
     tocs = {}
+    rd = next(p for p in (os.path.join(a.analysis, "romfs"), os.path.join(a.analysis, "tables", "romfs")) if os.path.isdir(p))
+    # the superbundles' own chunk tables: where the game really looks a chunk up (by GUID); every .toc that lists one is rewritten
+    n_tab = 0
+    for dp, _, fs in os.walk(rd):
+        for f in fs:
+            if not f.endswith(".toc") or f == "layout.toc": continue
+            toc = os.path.relpath(os.path.join(dp, f), rd).replace(os.sep, "/")
+            if toc.split("/")[0] not in a.tocs.split(","): continue
+            d = open(os.path.join(dp, f), "rb").read()
+            if len(d) < fbtoc.BODY + 0x40: continue
+            tab = fbtoc.chunk_table(d); hit = [g for g in new_chunks if g in tab]
+            if not hit: continue
+            d = bytearray(tocs.get(toc, d))
+            for g in hit:
+                off, st = new_chunks[g]; fbtoc.set_chunk(d, tab[g], CAS_ID, off, st); n_tab += 1
+            tocs[toc] = bytes(d)
+    print(f"{n_tab} chunk table records in {len(tocs)} tocs")
     for (toc, bi), recs in sorted(relocate.items()):
-        if toc not in tocs:
-            rd = next(p for p in (os.path.join(a.analysis, "romfs"), os.path.join(a.analysis, "tables", "romfs")) if os.path.isdir(p))
-            tocs[toc] = open(os.path.join(rd, toc), "rb").read()
+        if toc not in tocs: tocs[toc] = open(os.path.join(rd, toc), "rb").read()
         items = fbtoc.read_block(tocs[toc], bi)
         for i, (off, st) in recs.items(): items[i] = (CAS_ID, off, st, items[i][3])
         tocs[toc] = fbtoc.replace_block(tocs[toc], bi, items)

@@ -70,3 +70,26 @@ def cas_id(patch, persistent_index, n):
 def cas_path(cid, chunk_names):
     pi, n = struct.unpack_from(">IH", cid, 2)
     return f"{'Patch' if cid[1] else 'Data'}/NX/{chunk_names[pi]}/cas_{n:02d}.cas"
+
+
+# The superbundle's own chunk table (header [4] GUID entries, [5] count, [6] records): the game finds a chunk's data here, by GUID,
+# not through the bundles that list it. Entry: {GUID, bytes reversed (16), u32 0x80000000 | record index in u32 units};
+# record (16 bytes at [6] + 4 * index): {cas id (8), u32 offset, u32 stored size}, one per chunk.
+
+def chunk_table(d):
+    """{GUID hex (as manifests write it): record position}"""
+    h = header(d); out = {}
+    for k in range(h[5]):
+        e = BODY + h[4] + 20 * k
+        v, = struct.unpack_from(">I", d, e + 16)
+        out[bytes(d[e:e + 16][::-1]).hex()] = BODY + h[6] + 4 * (v & 0xFFFFFF)
+    return out
+
+
+def read_chunk(d, pos):
+    return bytes(d[pos:pos + 8]), *struct.unpack_from(">II", d, pos + 8)
+
+
+def set_chunk(d, pos, cid, offset, stored):
+    """d (bytearray) with one chunk record pointed elsewhere, in place"""
+    d[pos:pos + 16] = cid + struct.pack(">II", offset, stored)
