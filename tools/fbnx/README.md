@@ -67,3 +67,26 @@ D'après le lecteur de Peanuts Native (`dm/gfx/tools/frostbite.py`, testé sur l
 ooz (décodeur Oodle libre, https://github.com/powzix/ooz) en bibliothèque partagée :
 `g++ -O2 -fPIC -shared -w -fpermissive -o libooz.so kraken_lib.cpp lzna.cpp bitknit.cpp ooz_api.cpp`, avec un
 `ooz_api.cpp` qui exporte `extern "C" int ooz_decompress(src, src_len, dst, dst_len)` (appel de `Kraken_Decompress`).
+
+## Têtes complètes PC → Switch (en cours, 28/11/2026)
+
+Comparé sur Bukayo Saka (sa tête du jeu Switch, `var_0`, et celle du pack PC, `var_1`) :
+
+| Élément | PC | Switch | Conversion |
+|---|---|---|---|
+| EBX (toutes les déclarations d'assets) | RIFF `EBX`/`EBXD` | **identique** (mêmes tailles, mêmes structures) | aucune, sauf noms et références |
+| Maillage de base (`gpudeformbasemeshasset`, res `ed27dbda`) | 2 niveaux de détail | 1 seul : **le niveau 1 du PC, octet pour octet de même format** | copier le niveau 1 du PC comme niveau 0 |
+| Morphs (`headmorphblend*`, res `675fa1b1`) | 4 niveaux, encodage dense (une plage par niveau) | 3 niveaux (ceux du PC moins le premier), encodage creux (plages + sommets isolés) | retirer le niveau 0 ; l'en-tête (9 tableaux de 4 u32 par niveau, 2 listes, données float32) accepte les deux encodages |
+| Cheveux, haircap (`MeshSet`, res `49b156d4`) | en-tête, puis par niveau : sommets (un flux par attribut), indices 16 bits | **même en-tête champ pour champ** | 9 flux → 7 : le PC a 8 influences d'os (le 2e groupe de 4 est toujours vide), la Switch 4 ; ajuster déclarations, tailles, offset du niveau 1, constantes 0x784→0x785 et 0x338→0x32C, nombre max d'influences 8→4 |
+| Textures | BC 1024² | BC 512² block-linear | fait (`facepack2nx.py`) |
+
+Les métadonnées de res du manifeste (16 octets) : `{u32 offset de la table de relocation, u32 sa taille, 8 octets}` ;
+les 8 derniers octets sont la taille des données après l'en-tête pour un `MeshSet`, un hash (pas FNV/SHA-1/MD5 du
+contenu) pour les morphs et les maillages de base. Manifeste d'un bundle : `{u32 BE taille}` puis
+`{magic 9D798ED6, total, nb ebx, nb res, nb chunks, offset des chaînes}`, SHA-1 × total, (nom, taille) des ebx puis
+des res, types des res, métadonnées 16 octets × res, RID 8 octets × res, chunks (GUID, offset logique, taille), chaînes.
+
+Un joueur est relié à son bundle de tête par la table `content/common/configs/bundlereftable/starhead_brt`
+(res `428ec9d4`, 1,6 Mio, dans `contentlaunchsb`) ; le FIFA Editor Tool la complète à l'installation. Ajouter une tête =
+nouveau bundle (toc + manifeste), entrée dans cette table, et dans la base d'effectifs `headclasscode` 1 → 0.
+
