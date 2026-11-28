@@ -49,8 +49,16 @@ D'après le lecteur de Peanuts Native (`dm/gfx/tools/frostbite.py`, testé sur l
 - `layout.toc` énumère chaque fichier cas existant : un nouveau `cas_NN` n'y serait pas connu. Les nouvelles données vont
   donc à la fin d'un petit cas existant, `Patch/NX/superbundlelayout/commentaryfull_eng_us/cas_01.cas` (4 Kio, toujours
   installé), livré par le mod avec ses 4 Kio d'origine devant.
-- Les `.toc` sont signées (RSA, en-tête `00D1CE01`) : le mod de test (échange de deux textures de Saka dans la toc)
-  dit si le jeu accepte une toc modifiée.
+- Les `.toc` sont signées (RSA, en-tête `00D1CE01`), mais **le jeu accepte une toc modifiée** : vérifié le 28/11/2026 dans
+  Peanuts Native officiel avec un mod de test (deux textures de Saka échangées dans la toc : son visage change en jeu).
+- En-têtes de texture Switch : même structure que sur PC (format à 0x0C, largeur/hauteur à 0x16, mips à 0x1E, GUID du
+  chunk à 0x28, tailles des mips à 0x38), mêmes codes de format ; seul le mot à 0x14 diffère (0x0801 au lieu de 0x0001).
+  Le swizzle de `nxtex.py` est vérifié sur la vraie texture du visage de Saka (mips 0 et 3 lisibles).
+- Premier mod produit : 43 joueurs, 129 textures (couleur, normal, specmask) dans 82 bundles de `contentsb` et
+  `contentlaunchsb` (Data et Patch).
+- Restent à faire : les 31 visages absents de la Switch et les 37 textures de corps tatoués (2 seulement existent sur
+  Switch) demandent d'ajouter des ressources et des bundles ; les maillages (forme de la tête, cheveux) ont un format
+  Switch différent, à décoder.
 - Le pack de ViP3eR ajoute pour 43 joueurs une variation `var_1` (nouveaux bundles) : la conversion remplace leur
   `var_0` du jeu. 31 autres visages sont des joueurs sans tête « star » sur Switch : il faudra ajouter des bundles.
 - Visage seulement par défaut (couleur, normal, specmask : le dépliage UV des têtes est commun) ; les textures de
