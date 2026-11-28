@@ -1,7 +1,7 @@
 From c628eb1fe785bcd003fa581746f5f780c281ff8c Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Fri, 27 Nov 2026 17:25:34 +0000
-Subject: [PATCH 2/3] Peanuts Nova: 32-lane compute subgroups on the Xclipse's
+Subject: [PATCH 2/4] Peanuts Nova: 32-lane compute subgroups on the Xclipse's
  drivers
 
 DM_VK_SUBGROUP_SMALL (restart; default 1 on RADV and Samsung's driver):

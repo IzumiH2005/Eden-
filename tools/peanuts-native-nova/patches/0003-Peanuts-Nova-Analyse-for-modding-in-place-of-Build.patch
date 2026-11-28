@@ -1,7 +1,7 @@
 From bbbc2053d4b51e5a67648f0f80ad32370f2068b6 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 28 Nov 2026 10:21:48 +0000
-Subject: [PATCH 3/3] Peanuts Nova: Analyse for modding in place of Build
+Subject: [PATCH 3/4] Peanuts Nova: Analyse for modding in place of Build
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

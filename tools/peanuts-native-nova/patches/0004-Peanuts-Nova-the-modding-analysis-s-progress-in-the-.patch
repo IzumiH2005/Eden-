@@ -1,0 +1,170 @@
+From 74a444054e5e3f6af5e26e81e7a83532486c35b9 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 28 Nov 2026 10:32:32 +0000
+Subject: [PATCH 4/4] Peanuts Nova: the modding analysis's progress in the app
+
+ModAnalysisService writes its state to files/mod-analysis-status.txt (the
+app's processes share it): starting, running with bundles read / total,
+done with the zip's path, or failed. Lancer asks for the notification
+permission (Android 13+; Nova never prepares, which asked it before) and
+opens a window that reads that state every second: the stage, a bar,
+how long since the last news, and a hint when the engine goes quiet. A
+second tap while one runs shows its progress instead of starting another.
+---
+ .../dev/nxnative/android/MainActivity.java    | 53 +++++++++++++++++--
+ .../nxnative/android/ModAnalysisService.java  | 32 +++++++++--
+ 2 files changed, 78 insertions(+), 7 deletions(-)
+
+diff --git a/android/app/src/main/java/dev/nxnative/android/MainActivity.java b/android/app/src/main/java/dev/nxnative/android/MainActivity.java
+index 5bf1ded1..aa8df170 100644
+--- a/android/app/src/main/java/dev/nxnative/android/MainActivity.java
++++ b/android/app/src/main/java/dev/nxnative/android/MainActivity.java
+@@ -943,7 +943,11 @@ public final class MainActivity extends Activity {
+         LinearLayout pack = Ui.add(content, Ui.listCard(this), 6);
+         // NOVA: no Prepare again / Build again (packs come from Peanuts Native: Import pack…); in their place the modding analysis of the game's .nup
+         if (g.gameDir.toLowerCase(java.util.Locale.ROOT).endsWith(".nup"))
+-            pack.addView(new Ui.Setting(this, "🔬", "Analyser pour le modding", v -> novaAnalyse(new File(g.gameDir), g.titleId, g.name))
++            pack.addView(new Ui.Setting(this, "🔬", "Analyser pour le modding", v -> {
++                        String[] st = ModAnalysisService.readStatus(this);
++                        if (st != null && (st[0].equals("running") || st[0].equals("starting")) && ModAnalysisService.statusFile(this).lastModified() > System.currentTimeMillis() - 30_000) novaProgress(this);
++                        else novaAnalyse(new File(g.gameDir), g.titleId, g.name);
++                    })
+                     .value("Lit les archives du jeu sur tous les cœurs · zip dans Download/PeanutsNova-modding").chevron(this).view);
+         if (Ondevice.shows(g))   // its card is the progress card: the job's own Manage (Forget, the deletes)
+             pack.addView(new Ui.Setting(this, "⏳", "Preparing", v -> { page(false); Ondevice.manageJob(this); }).value("Forget the job or delete its files").chevron(this).view);
+@@ -1565,17 +1569,60 @@ public final class MainActivity extends Activity {
+     void novaAnalyse(File nup, String titleId, String name) { novaAnalyse(this, nup, titleId, name); }
+ 
+     public static void novaAnalyse(android.app.Activity a, File nup, String titleId, String name) {
++        String[] cur = ModAnalysisService.readStatus(a);
++        if (cur != null && (cur[0].equals("running") || cur[0].equals("starting")) && ModAnalysisService.statusFile(a).lastModified() > System.currentTimeMillis() - 30_000) {
++            novaProgress(a);   // one runs: its progress, not a second one
++            return;
++        }
+         new AlertDialog.Builder(a).setTitle("Analyser pour le modding")
+                 .setMessage("Lit les archives de " + name + " directement dans son .nup, sur tous les cœurs du téléphone : la liste des fichiers, les tables "
+                         + "des archives et le contenu de chaque bundle (maillots, visages, textures…). Rien n'est modifié.\n\nDurée : de quelques minutes à "
+                         + "un quart d'heure. Une notification suit l'avancement ; le résultat est un zip dans Download/PeanutsNova-modding, à envoyer.")
+                 .setPositiveButton("Lancer", (d, w) -> {
+-                    boolean ok = ModAnalysisService.start(a, nup, titleId, name);
+-                    android.widget.Toast.makeText(a, ok ? "Analyse lancée : suis la notification" : "Une analyse est déjà en cours", android.widget.Toast.LENGTH_LONG).show();
++                    if (android.os.Build.VERSION.SDK_INT >= 33 && a.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
++                        a.requestPermissions(new String[] {android.Manifest.permission.POST_NOTIFICATIONS}, 7301);
++                    boolean started = ModAnalysisService.start(a, nup, titleId, name);
++                    if (!started) android.widget.Toast.makeText(a, "Une analyse est déjà en cours : voici son avancement", android.widget.Toast.LENGTH_LONG).show();
++                    novaProgress(a);
+                 })
+                 .setNegativeButton("Annuler", null).show();
+     }
+ 
++    /** NOVA: the analysis's progress in the app (ModAnalysisService's status file, read every second while the window is open) */
++    public static void novaProgress(android.app.Activity a) {
++        int pad = (int) (20 * a.getResources().getDisplayMetrics().density);
++        LinearLayout box = new LinearLayout(a); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(pad, pad / 2, pad, 0);
++        TextView text = new TextView(a); text.setText("Démarrage…");
++        android.widget.ProgressBar bar = new android.widget.ProgressBar(a, null, android.R.attr.progressBarStyleHorizontal);
++        bar.setIndeterminate(true); bar.setMax(1000);
++        TextView sub = new TextView(a); sub.setTextSize(12); sub.setAlpha(0.7f);
++        box.addView(text); box.addView(bar); box.addView(sub);
++        AlertDialog dlg = new AlertDialog.Builder(a).setTitle("Analyse pour le modding").setView(box)
++                .setPositiveButton("Fermer", null).setCancelable(true).create();
++        android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
++        long t0 = System.currentTimeMillis();
++        Runnable tick = new Runnable() { public void run() {
++            if (!dlg.isShowing()) return;
++            String[] st = ModAnalysisService.readStatus(a);
++            if (st == null) { text.setText("En attente du moteur d'analyse…"); }
++            else {
++                long d = 0, t = 0; try { d = Long.parseLong(st[1]); t = Long.parseLong(st[2]); } catch (NumberFormatException ignored) { }
++                text.setText(st[3]);
++                boolean end = st[0].equals("done") || st[0].equals("failed");
++                bar.setIndeterminate(!end && t <= 0);
++                if (end) bar.setProgress(st[0].equals("done") ? 1000 : 0); else if (t > 0) bar.setProgress((int) (1000 * d / t));
++                long age = (System.currentTimeMillis() - ModAnalysisService.statusFile(a).lastModified()) / 1000;
++                sub.setText(end ? (st[0].equals("done") ? "Fini." : "Arrêté.")
++                        : age > 60 ? "Aucune nouvelle depuis " + age + " s : le moteur s'est peut-être arrêté. Envoie une capture de cette fenêtre."
++                        : "En cours depuis " + (System.currentTimeMillis() - t0) / 1000 + " s · dernière nouvelle il y a " + age + " s. Tu peux fermer cette fenêtre : l'analyse continue.");
++                if (end) return;
++            }
++            h.postDelayed(this, 1000);
++        } };
++        dlg.setOnShowListener(x -> h.post(tick));
++        dlg.show();
++    }
++
+     private void start(Game g) {
+         // PEANUTS begin: recommend Turnip before a system-driver launch, or warn before a known bad driver build's, each with a one-launch bypass.
+         if (GpuDriver.launchesSystem(this, g.titleId) && Readiness.customDriversFit(Prefs.facts(this, Recommend.SYSTEM))) {   // only where a custom driver can load: a Mali, Xclipse or PowerVR GPU has its system driver alone
+diff --git a/android/app/src/ondevice/java/dev/nxnative/android/ModAnalysisService.java b/android/app/src/ondevice/java/dev/nxnative/android/ModAnalysisService.java
+index 910814df..a8dc711c 100644
+--- a/android/app/src/ondevice/java/dev/nxnative/android/ModAnalysisService.java
++++ b/android/app/src/ondevice/java/dev/nxnative/android/ModAnalysisService.java
+@@ -35,11 +35,31 @@ public final class ModAnalysisService extends Service {
+     /** Starts the analysis of nup (a game's .nup file) for title ID titleId named name; false when one already runs */
+     public static boolean start(Context c, File nup, String titleId, String name) {
+         if (running) return false;
++        String[] st = readStatus(c);
++        if (st != null && (st[0].equals("running") || st[0].equals("starting")) && statusFile(c).lastModified() > System.currentTimeMillis() - 30_000) return false;
++        writeStatus(c, "starting", 0, 0, "Démarrage du moteur d'analyse…");
+         Intent i = new Intent(c, ModAnalysisService.class).putExtra(EXTRA_NUP, nup.getPath()).putExtra(EXTRA_TITLE, titleId).putExtra(EXTRA_NAME, name);
+         c.startForegroundService(i);
+         return true;
+     }
+ 
++    /** The analysis's state for the app's own window (another process): one line "state\tdone\ttotal\tmessage", state starting / running / done / failed */
++    public static File statusFile(Context c) { return new File(c.getFilesDir(), "mod-analysis-status.txt"); }
++
++    public static void writeStatus(Context c, String state, long done, long total, String message) {
++        try {
++            File f = statusFile(c), tmp = new File(f.getPath() + ".tmp");
++            Files.write(tmp.toPath(), (state + "\t" + done + "\t" + total + "\t" + message.replace('\n', ' ').replace('\t', ' ')).getBytes(java.nio.charset.StandardCharsets.UTF_8));
++            if (!tmp.renameTo(f)) Files.copy(tmp.toPath(), f.toPath(), StandardCopyOption.REPLACE_EXISTING);
++        } catch (IOException | RuntimeException e) { Log.w(TAG, "status: " + e); }
++    }
++
++    /** [state, done, total, message] as last written, or null */
++    public static String[] readStatus(Context c) {
++        try { String[] p = new String(Files.readAllBytes(statusFile(c).toPath()), java.nio.charset.StandardCharsets.UTF_8).split("\t", 4); return p.length == 4 ? p : null; }
++        catch (IOException | RuntimeException e) { return null; }
++    }
++
+     public static File outDir() { return new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "PeanutsNova-modding"); }
+ 
+     private NotificationManager nm;
+@@ -72,6 +92,7 @@ public final class ModAnalysisService extends Service {
+             if (!work.mkdirs()) throw new IOException("cannot make " + work);
+             if (!log.createNewFile()) throw new IOException("cannot make " + log);
+             PackNative.context(this);
++            writeStatus(this, "running", 0, 0, "Préparation du Python intégré et lecture des tables…");
+             final boolean[] done = {false};
+             Thread watch = new Thread(() -> watch(log, name, done), "nova-mod-analysis-progress");
+             watch.start();
+@@ -85,10 +106,12 @@ public final class ModAnalysisService extends Service {
+             Files.copy(zip.toPath(), to.toPath(), StandardCopyOption.REPLACE_EXISTING);
+             Files.copy(log.toPath(), new File(dir, title + "-modding-" + stamp + ".log").toPath(), StandardCopyOption.REPLACE_EXISTING);
+             ok = true;
+-            msg = "Done: Download/PeanutsNova-modding/" + to.getName() + " (" + (to.length() >> 20) + " MB). Send this file.";
+-        } catch (IOException | RuntimeException e) {
++            msg = "Terminé : Download/PeanutsNova-modding/" + to.getName() + " (" + Math.max(1, to.length() >> 20) + " Mo). Envoie ce fichier.";
++            writeStatus(this, "done", 1, 1, msg);
++        } catch (IOException | RuntimeException | LinkageError e) {
+             Log.e(TAG, "analysis failed", e);
+-            msg = "Failed: " + e.getMessage();
++            msg = "Échec : " + e.getMessage() + " (le .log est dans Download/PeanutsNova-modding)";
++            writeStatus(this, "failed", 0, 0, msg);
+             try {
+                 File dir = outDir(); dir.mkdirs();
+                 if (log.isFile()) Files.copy(log.toPath(), new File(dir, title + "-modding-" + stamp + "-failed.log").toPath(), StandardCopyOption.REPLACE_EXISTING);
+@@ -116,7 +139,8 @@ public final class ModAnalysisService extends Service {
+                     if (last != null) {
+                         String[] p = last.split(" ");
+                         long d = Long.parseLong(p[1]), t = Math.max(1, Long.parseLong(p[2]));
+-                        nm.notify(NOTE, note(name, "Reading the game's archives: " + d + " / " + t + " bundles", (int) (100 * d / t)));
++                        nm.notify(NOTE, note(name, "Lecture des archives : " + d + " / " + t + " bundles", (int) (100 * d / t)));
++                        writeStatus(this, "running", d, t, "Lecture des archives du jeu : " + d + " / " + t + " bundles");
+                     }
+                 }
+             } catch (InterruptedException e) { return; } catch (IOException | RuntimeException ignored) { /* the next second tries again */ }
+-- 
+2.43.0
+
