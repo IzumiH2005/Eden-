@@ -135,6 +135,50 @@ def write_outputs(db: bytes, name: str, out: str) -> None:
     print(f"  {os.path.join(out, name)}\n  {os.path.join(out, 'switch', 'INDEX')} ({PREFIX} bytes) + DATA ({len(f) - PREFIX} bytes)")
 
 
+# ---- the Switch save's own item format (read from a real FC 27 save: Peanuts Native backup, 2026-11-28)
+# The save holds main/<fnv1(name) as 8 hex digits>/ per item, with three files:
+#   name    the item's name, no NUL (e.g. Squads20261123000000, UCLTrnmnt20261028060848, Settings20261028031231)
+#   INDEX   3 entries of 0x50 bytes: {char name[32], u64 1, u64 size, u64 offset, u64 end, 16 zero bytes}: body, displayname, header
+#   DATA    the three sections back to back, displayname, header, body; each {u64 length after these 16 bytes, u64 time (Unix ns), bytes}
+#           displayname: the label the game lists, NUL-terminated; header: 0x404 bytes after the 16; body: the 48-byte main header
+#           {"SaveType_<kind>\0", u32 zlib CRC-32 of the body from its byte 64 to the end, u32 0x31c, u32 1, zeros}, then the item's data
+#           (squads: u32 data size, the T3DB database, the BNRY chunk, as in the PC file)
+def fnv1_32(b: bytes) -> int:
+    h = 0x811C9DC5
+    for x in b: h = ((h * 0x01000193) & 0xFFFFFFFF) ^ x
+    return h
+
+def switch_item(squad_file: bytes, name: str, label: str, now_ns: int):
+    """{relative path: bytes} of the save item main/<hash>/{name,INDEX,DATA} holding the squad file's database"""
+    import zlib
+    _, rest, _ = parse_squad_file(squad_file)
+    data = rest[MAIN:]                                   # u32 data size, database, BNRY: as the PC file has them after its main header
+    main = bytearray(MAIN); main[:len(SAVETYPE)] = SAVETYPE
+    struct.pack_into("<III", main, 16, zlib.crc32(data) & 0xFFFFFFFF, 0x31C, 1)
+    def section(content: bytes) -> bytes: return struct.pack("<QQ", len(content), now_ns) + content
+    disp = section(label.encode() + b"\0"); head = section(bytes(0x404)); body = section(bytes(main) + data)
+    blob = disp + head + body
+    def entry(nm: bytes, size: int, off: int) -> bytes: return nm.ljust(32, b"\0") + struct.pack("<QQQQ", 1, size, off, off + size) + bytes(16)
+    index = entry(b"body", len(body), len(disp) + len(head)) + entry(b"displayname", len(disp), 0) + entry(b"header", len(head), len(disp))
+    folder = f"main/{fnv1_32(name.encode()):08x}/"
+    return {folder + "name": name.encode(), folder + "INDEX": index, folder + "DATA": blob}
+
+def check_item(files: dict, folder: str) -> str:
+    """the same reading the game's items pass: INDEX against DATA, the body's CRC, the folder's hash"""
+    import zlib
+    idx, data, name = files[folder + "INDEX"], files[folder + "DATA"], files[folder + "name"]
+    secs = {}
+    for i in range(3):
+        nm = idx[0x50 * i:0x50 * i + 32].rstrip(b"\0").decode(); one, size, off, end = struct.unpack_from("<QQQQ", idx, 0x50 * i + 32)
+        if one != 1 or off + size != end or end > len(data): raise ValueError(f"{folder}: bad INDEX entry {nm}")
+        if struct.unpack_from("<Q", data, off)[0] != size - 16: raise ValueError(f"{folder}: section {nm} length")
+        secs[nm] = data[off + 16:end]
+    body = secs["body"]
+    if struct.unpack_from("<I", body, 16)[0] != zlib.crc32(body[MAIN:]) & 0xFFFFFFFF: raise ValueError(f"{folder}: body CRC")
+    if folder.rstrip("/").rsplit("/", 1)[-1] != f"{fnv1_32(name):08x}": raise ValueError(f"{folder}: folder is not fnv1(name)")
+    return f"{name.decode()}: {body[:16].rstrip(bytes(1)).decode()} '{secs['displayname'].rstrip(bytes(1)).decode()}', body {len(body)} bytes, ok"
+
+
 # ---- Eden save exports
 def describe(name: str, b: bytes) -> str:
     head = b[:16]

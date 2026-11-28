@@ -38,11 +38,23 @@ python3 fc27_switch_squads.py patch-save export.zip out/Squads<date>000000 impor
 disposition (INDEX + DATA séparés, ou fichier entier dans DATA), remplace ce seul emplacement et garde tout le
 reste. Il refuse sans rien écrire une disposition inconnue, une sauvegarde sans effectifs et une base PC.
 
+## Format réel de la sauvegarde Switch (lu le 28/11/2026 sur une vraie sauvegarde FC 27)
+
+Chaque élément sauvegardé est un dossier `main/<FNV-1 32 bits du nom, 8 chiffres hexa>/` avec trois fichiers :
+
+| Fichier | Contenu |
+|---|---|
+| `name` | le nom de l'élément, sans NUL (`Squads20261123000000`, `Settings…`, `UCLTrnmnt…`) |
+| `INDEX` | 3 entrées de 0x50 octets `{nom[32], u64 1, u64 taille, u64 début, u64 fin, 16 zéros}` : body, displayname, header |
+| `DATA` | les sections displayname, header (0x404 octets), body, chacune `{u64 longueur après ces 16 octets, u64 heure en ns Unix, contenu}` |
+
+Le body commence par l'en-tête de 48 octets `{"SaveType_<type>\0", u32 CRC-32 zlib du body à partir de l'octet 64,
+u32 0x31c, u32 1, zéros}` ; pour les effectifs viennent ensuite, comme dans le fichier PC, la taille, la base T3DB et le
+bloc BNRY. `switch_item()` écrit un tel élément et `check_item()` relit un élément comme le jeu (vérifié sur les éléments
+d'une vraie sauvegarde). La découpe `switch/INDEX` + `switch/DATA` des premières versions était une hypothèse fausse.
+
 ## Limites
 
-- Le format exact de la sauvegarde Switch (INDEX / DATA) n'est pas documenté publiquement. La découpe
-  écrite par `fetch` est déduite du format PC et des descriptions de la communauté. `patch-save` vérifie la
-  disposition réelle avant d'écrire.
 - La base suit la dernière mise à jour du jeu : FC 27 doit être à jour dans Eden.
 - Un fichier d'effectifs ne change rien aux performances : il ne contient que les données des joueurs et des
   équipes.
