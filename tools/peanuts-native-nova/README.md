@@ -54,6 +54,15 @@ Peanuts Native 0.1.9 : un pack préparé par l'une des deux applications fonctio
 **Non mesuré sur un vrai Galaxy A56** : à comparer avec Peanuts Native, au même endroit et dans les mêmes
 réglages (FPS, FT et 1 %L de l'overlay).
 
+## Analyse pour le modding (et plus de Build)
+
+Nova ne prépare plus les jeux : le bouton **Build** de la fiche du jeu et **Prepare again / Build again** de sa page sont
+remplacés par **« Analyser pour le modding »**. Les packs viennent de Peanuts Native officiel (**Export pack…** là-bas,
+**Import pack…** ici). L'analyse lance `dm/tools/fc27probe.py all` dans le Python embarqué du préparateur, sur le `.nup` du
+jeu là où il est : liste des fichiers, tables `.toc` de chaque superbundle et manifeste de chaque bundle, lus avec un
+thread par cœur. Le résultat est un zip dans `Download/PeanutsNova-modding/`, à envoyer pour le travail de conversion
+des mods PC. Les mods convertis sont des mods RomFS au format Switch, que Peanuts Native officiel importe (Mods).
+
 ## Installer et récupérer ses jeux
 
 1. Installer `peanuts-nova-0.1.9-a56.apk`, ouvrir **Peanuts Nova** et accorder l'accès à tous les fichiers.

@@ -1,0 +1,517 @@
+From bbbc2053d4b51e5a67648f0f80ad32370f2068b6 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 28 Nov 2026 10:21:48 +0000
+Subject: [PATCH 3/3] Peanuts Nova: Analyse for modding in place of Build
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The game sheet's Build and the game page's Prepare again / Build again
+give way to "Analyser pour le modding": ModAnalysisService (in the :pack
+process) runs dm/tools/fc27probe.py "all" in the packer's own Python on
+the game's .nup where it is: the RomFS listing, every superbundle .toc
+and every bundle manifest, read with one thread per core, into one zip
+in Download/PeanutsNova-modding, with a progress notification. A game
+without its pack offers Import pack… (packs come from Peanuts Native).
+---
+ .../dev/nxnative/android/MainActivity.java    |  32 ++-
+ .../main/java/dev/peanuts/ui/GameSheet.java   |   6 +-
+ android/app/src/ondevice/AndroidManifest.xml  |   1 +
+ .../nxnative/android/ModAnalysisService.java  | 148 +++++++++++
+ dm/tools/fc27probe.py                         | 235 ++++++++++++++++++
+ 5 files changed, 411 insertions(+), 11 deletions(-)
+ create mode 100644 android/app/src/ondevice/java/dev/nxnative/android/ModAnalysisService.java
+ create mode 100644 dm/tools/fc27probe.py
+
+diff --git a/android/app/src/main/java/dev/nxnative/android/MainActivity.java b/android/app/src/main/java/dev/nxnative/android/MainActivity.java
+index c1f31a4a..5bf1ded1 100644
+--- a/android/app/src/main/java/dev/nxnative/android/MainActivity.java
++++ b/android/app/src/main/java/dev/nxnative/android/MainActivity.java
+@@ -857,9 +857,9 @@ public final class MainActivity extends Activity {
+                     info.addView(n, wl);
+                 }
+                 if (problem != null && problem.prepare && !problem.playable && !problem.legacy) {   // the big button prepares (Ondevice asks first and says what it will make)
+-                    play.setText(problem.resume ? "Continue preparing" : problem.shadersOnly ? "Prepare shaders" : "Prepare");
++                    play.setText("Import pack…");   // NOVA: no Prepare: the pack comes from Peanuts Native (its Export pack…)
+                     play.setIcon(R.drawable.ic_build);
+-                    play.setOnClickListener(v -> { if (!needAccess(new File(g.gameDir))) Ondevice.prepare(this, new File(g.gameDir), false); });
++                    play.setOnClickListener(v -> PackUi.importPick(this, g));
+                     st.setOnClickListener(v -> play.performClick());   // the state chip does what the state needs
+                     st.setContentDescription(play.label.getText() + ": " + st.getText());
+                 }
+@@ -941,9 +941,10 @@ public final class MainActivity extends Activity {
+         }, "nx-game-files").start();
+         Ui.add(content, Ui.section(this, "Pack"), 16);
+         LinearLayout pack = Ui.add(content, Ui.listCard(this), 6);
+-        if (Ondevice.isDump(new File(g.gameDir)) && noProfile == null)
+-            pack.addView(new Ui.Setting(this, "🔁", "Prepare again", v -> { page(false); Ondevice.prepare(this, new File(g.gameDir), true); }).value("Remakes what does not fit").chevron(this).view);
+-        if (noProfile == null) pack.addView(new Ui.Setting(this, "🔨", "Build again", v -> { page(false); dev.peanuts.ui.GameSheet.open(this, g.titleId); }).value("Remakes what no longer fits · Import again").chevron(this).view);   // PEANUTS: the Build sheet (dev.peanuts.ui.GameSheet); Rebuild keeps the .nup, the sheet's Import again makes it anew
++        // NOVA: no Prepare again / Build again (packs come from Peanuts Native: Import pack…); in their place the modding analysis of the game's .nup
++        if (g.gameDir.toLowerCase(java.util.Locale.ROOT).endsWith(".nup"))
++            pack.addView(new Ui.Setting(this, "🔬", "Analyser pour le modding", v -> novaAnalyse(new File(g.gameDir), g.titleId, g.name))
++                    .value("Lit les archives du jeu sur tous les cœurs · zip dans Download/PeanutsNova-modding").chevron(this).view);
+         if (Ondevice.shows(g))   // its card is the progress card: the job's own Manage (Forget, the deletes)
+             pack.addView(new Ui.Setting(this, "⏳", "Preparing", v -> { page(false); Ondevice.manageJob(this); }).value("Forget the job or delete its files").chevron(this).view);
+         pack.addView(new Ui.Setting(this, "📦", "Export pack…", v -> PackUi.exportPick(this, g)).value("One .zip, into a folder you pick").chevron(this).view);
+@@ -1524,8 +1525,7 @@ public final class MainActivity extends Activity {
+                     .setMessage((dump ? Ondevice.shadersText(new File(g.packDir), g.titleId) : "Without them the game draws nothing.")
+                             + "\n\n" + lp)
+                     .setNeutralButton("Pick pack folder", (d, w) -> pickPack.run()).setNegativeButton("Cancel", null);
+-            if (dump) b.setPositiveButton("Prepare", (d, w) -> Ondevice.prepare(this, gd, false));
+-            else b.setPositiveButton("Start anyway", (d, w) -> start(g));
++            b.setPositiveButton("Start anyway", (d, w) -> start(g));   // NOVA: no Prepare
+             b.show();
+             return;
+         }
+@@ -1558,8 +1558,22 @@ public final class MainActivity extends Activity {
+         AlertDialog.Builder b = Ui.explain(this, "The pack cannot start this game", why + (dump ? "\n\nPrepare again rewrites the game's code from your dump (a few minutes; shaders are kept)." : ""),
+                         (detail.isEmpty() ? "" : detail + "\n") + "Pack: " + g.packDir)
+                 .setNegativeButton("Cancel", null).setNeutralButton("Pick pack folder", (d, w) -> pickPack.run());
+-        if (dump) b.setPositiveButton("Prepare again", (d, w) -> Ondevice.prepare(this, gd, false));
+-        b.show();
++        b.show();   // NOVA: no Prepare again (Import pack… from Peanuts Native)
++    }
++
++    // NOVA: the modding analysis (ModAnalysisService), from the game's page and from the library's game sheet
++    void novaAnalyse(File nup, String titleId, String name) { novaAnalyse(this, nup, titleId, name); }
++
++    public static void novaAnalyse(android.app.Activity a, File nup, String titleId, String name) {
++        new AlertDialog.Builder(a).setTitle("Analyser pour le modding")
++                .setMessage("Lit les archives de " + name + " directement dans son .nup, sur tous les cœurs du téléphone : la liste des fichiers, les tables "
++                        + "des archives et le contenu de chaque bundle (maillots, visages, textures…). Rien n'est modifié.\n\nDurée : de quelques minutes à "
++                        + "un quart d'heure. Une notification suit l'avancement ; le résultat est un zip dans Download/PeanutsNova-modding, à envoyer.")
++                .setPositiveButton("Lancer", (d, w) -> {
++                    boolean ok = ModAnalysisService.start(a, nup, titleId, name);
++                    android.widget.Toast.makeText(a, ok ? "Analyse lancée : suis la notification" : "Une analyse est déjà en cours", android.widget.Toast.LENGTH_LONG).show();
++                })
++                .setNegativeButton("Annuler", null).show();
+     }
+ 
+     private void start(Game g) {
+diff --git a/android/app/src/main/java/dev/peanuts/ui/GameSheet.java b/android/app/src/main/java/dev/peanuts/ui/GameSheet.java
+index 2d0728df..ca0660f2 100644
+--- a/android/app/src/main/java/dev/peanuts/ui/GameSheet.java
++++ b/android/app/src/main/java/dev/peanuts/ui/GameSheet.java
+@@ -234,8 +234,10 @@ public final class GameSheet {
+         LinearLayout actions = PUi.row(a);
+         // while another game builds or waits, Build puts this one into the build queue (issue #348), and says so
+         boolean toQueue = !building && dev.peanuts.build.BuildPipeline.queueing();
+-        PUi.Action build = PUi.action(a, R.drawable.ic_build, toQueue ? "Add to queue" : ready ? "Rebuild" : unsupported ? "Build anyway" : "Build", PUi.Kind.PRIMARY, v -> startBuild());
+-        build.setEnabled(!building && title.base != null && !missingSetup && title.home != null && !fileGone);
++        // NOVA: no Build here (packs come from Peanuts Native: Import pack…); the modding analysis of the game's .nup takes its place
++        PUi.Action build = PUi.action(a, R.drawable.ic_build, "Analyser pour le modding", PUi.Kind.PRIMARY,
++                v -> dev.nxnative.android.MainActivity.novaAnalyse(a, title.base.file, title.titleId, title.name.isEmpty() ? title.titleId : title.name));
++        build.setEnabled(nupBase && !fileGone);
+         actions.addView(build, PUi.weight());
+         if (needKeys) {
+             LinearLayout.LayoutParams lp = PUi.wrap();
+diff --git a/android/app/src/ondevice/AndroidManifest.xml b/android/app/src/ondevice/AndroidManifest.xml
+index f945ec55..4c888b3c 100644
+--- a/android/app/src/ondevice/AndroidManifest.xml
++++ b/android/app/src/ondevice/AndroidManifest.xml
+@@ -15,6 +15,7 @@
+             android:exported="false"
+             android:process=":pack"
+             android:foregroundServiceType="dataSync" />
++        <service android:name=".ModAnalysisService" android:exported="false" android:process=":pack" android:foregroundServiceType="dataSync" />   <!-- NOVA: the modding analysis (dm/tools/fc27probe.py in the packer's Python) -->
+         <service android:name="dev.peanuts.build.BuildService" android:exported="false" android:foregroundServiceType="dataSync" />   <!-- PEANUTS: the library's build service (import → Prepare → companion) -->
+         <service android:name="dev.peanuts.build.ModBuildService" android:exported="false" android:foregroundServiceType="dataSync" />   <!-- PEANUTS: the modded-variant build (DESIGN-MODS.md "Code injection"), the Mods section's "Build with mods" -->
+     </application>
+diff --git a/android/app/src/ondevice/java/dev/nxnative/android/ModAnalysisService.java b/android/app/src/ondevice/java/dev/nxnative/android/ModAnalysisService.java
+new file mode 100644
+index 00000000..910814df
+--- /dev/null
++++ b/android/app/src/ondevice/java/dev/nxnative/android/ModAnalysisService.java
+@@ -0,0 +1,148 @@
++package dev.nxnative.android;
++
++import android.app.Notification;
++import android.app.NotificationChannel;
++import android.app.NotificationManager;
++import android.app.Service;
++import android.content.Context;
++import android.content.Intent;
++import android.content.pm.ServiceInfo;
++import android.os.Environment;
++import android.os.IBinder;
++import android.util.Log;
++
++import java.io.BufferedReader;
++import java.io.File;
++import java.io.FileReader;
++import java.io.IOException;
++import java.nio.file.Files;
++import java.nio.file.StandardCopyOption;
++import java.text.SimpleDateFormat;
++import java.util.Date;
++import java.util.Locale;
++
++/**
++ * NOVA: "Analyse for modding". Runs dm/tools/fc27probe.py ("all": the RomFS listing, every superbundle .toc, and the manifest of every bundle, read with one
++ * thread per core) in the embedded CPython on a game's .nup, where it is, and leaves one small zip in Download/PeanutsNova-modding/ to send for the work on
++ * PC mods. Runs in the :pack process (the packer's Python lives there), one analysis at a time, never beside a Prepare (Nova has none).
++ */
++public final class ModAnalysisService extends Service {
++    private static final String TAG = "nxmod", CHANNEL = "nova_mod_analysis";
++    private static final int NOTE = 7301;
++    static final String EXTRA_NUP = "nup", EXTRA_TITLE = "title", EXTRA_NAME = "name";
++    private static volatile boolean running;
++
++    /** Starts the analysis of nup (a game's .nup file) for title ID titleId named name; false when one already runs */
++    public static boolean start(Context c, File nup, String titleId, String name) {
++        if (running) return false;
++        Intent i = new Intent(c, ModAnalysisService.class).putExtra(EXTRA_NUP, nup.getPath()).putExtra(EXTRA_TITLE, titleId).putExtra(EXTRA_NAME, name);
++        c.startForegroundService(i);
++        return true;
++    }
++
++    public static File outDir() { return new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "PeanutsNova-modding"); }
++
++    private NotificationManager nm;
++
++    @Override public void onCreate() {
++        super.onCreate();
++        nm = getSystemService(NotificationManager.class);
++        nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Modding analysis", NotificationManager.IMPORTANCE_LOW));
++    }
++
++    @Override public IBinder onBind(Intent intent) { return null; }
++
++    @Override public int onStartCommand(Intent intent, int flags, int startId) {
++        if (intent == null || running) return START_NOT_STICKY;
++        running = true;
++        File nup = new File(intent.getStringExtra(EXTRA_NUP));
++        String title = intent.getStringExtra(EXTRA_TITLE), name = intent.getStringExtra(EXTRA_NAME);
++        try { startForeground(NOTE, note(name, "Starting", -1), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC); }
++        catch (RuntimeException e) { Log.w(TAG, "startForeground refused: " + e); }
++        new Thread(() -> run(nup, title, name), "nova-mod-analysis").start();
++        return START_NOT_STICKY;
++    }
++
++    private void run(File nup, String title, String name) {
++        String stamp = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(new Date());
++        File work = new File(getCacheDir(), "mod-analysis"), log = new File(work, "analysis.log");
++        boolean ok = false; String msg;
++        try {
++            deleteTree(work);
++            if (!work.mkdirs()) throw new IOException("cannot make " + work);
++            if (!log.createNewFile()) throw new IOException("cannot make " + log);
++            PackNative.context(this);
++            final boolean[] done = {false};
++            Thread watch = new Thread(() -> watch(log, name, done), "nova-mod-analysis-progress");
++            watch.start();
++            int code = PackNative.packRun("dm/tools/fc27probe.py", new String[] {"all", nup.getPath(), work.getPath()}, log.getPath());
++            done[0] = true;
++            File zip = new File(work, "modding.zip");
++            if (code != 0 || !zip.isFile()) throw new IOException("the analysis stopped (code " + code + "): " + tail(log));
++            File dir = outDir();
++            if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("cannot make " + dir);
++            File to = new File(dir, title + "-modding-" + stamp + ".zip");
++            Files.copy(zip.toPath(), to.toPath(), StandardCopyOption.REPLACE_EXISTING);
++            Files.copy(log.toPath(), new File(dir, title + "-modding-" + stamp + ".log").toPath(), StandardCopyOption.REPLACE_EXISTING);
++            ok = true;
++            msg = "Done: Download/PeanutsNova-modding/" + to.getName() + " (" + (to.length() >> 20) + " MB). Send this file.";
++        } catch (IOException | RuntimeException e) {
++            Log.e(TAG, "analysis failed", e);
++            msg = "Failed: " + e.getMessage();
++            try {
++                File dir = outDir(); dir.mkdirs();
++                if (log.isFile()) Files.copy(log.toPath(), new File(dir, title + "-modding-" + stamp + "-failed.log").toPath(), StandardCopyOption.REPLACE_EXISTING);
++            } catch (IOException | RuntimeException ignored) { /* the notification says it */ }
++        }
++        stopForeground(STOP_FOREGROUND_DETACH);
++        nm.notify(NOTE + 1, new Notification.Builder(this, CHANNEL).setSmallIcon(ok ? android.R.drawable.stat_sys_download_done : android.R.drawable.stat_notify_error)
++                .setContentTitle((ok ? "Modding analysis: " : "Modding analysis failed: ") + name).setContentText(msg)
++                .setStyle(new Notification.BigTextStyle().bigText(msg)).setAutoCancel(true).build());
++        running = false;
++        stopSelf();
++    }
++
++    /** Follows the tool's "progress <done> <total> <stage>" lines into the notification */
++    private void watch(File log, String name, boolean[] done) {
++        long pos = 0;
++        while (!done[0]) {
++            try {
++                Thread.sleep(1000);
++                try (java.io.RandomAccessFile f = new java.io.RandomAccessFile(log, "r")) {
++                    if (f.length() <= pos) continue;
++                    f.seek(pos); byte[] b = new byte[(int) Math.min(f.length() - pos, 1 << 20)]; f.readFully(b); pos += b.length;
++                    String last = null;
++                    for (String l : new String(b, java.nio.charset.StandardCharsets.UTF_8).split("\n")) if (l.startsWith("progress ")) last = l;
++                    if (last != null) {
++                        String[] p = last.split(" ");
++                        long d = Long.parseLong(p[1]), t = Math.max(1, Long.parseLong(p[2]));
++                        nm.notify(NOTE, note(name, "Reading the game's archives: " + d + " / " + t + " bundles", (int) (100 * d / t)));
++                    }
++                }
++            } catch (InterruptedException e) { return; } catch (IOException | RuntimeException ignored) { /* the next second tries again */ }
++        }
++    }
++
++    private Notification note(String name, String text, int pct) {
++        Notification.Builder b = new Notification.Builder(this, CHANNEL).setSmallIcon(android.R.drawable.stat_sys_download)
++                .setContentTitle("Analysing " + name + " for modding").setContentText(text).setOngoing(true).setOnlyAlertOnce(true);
++        b.setProgress(100, Math.max(0, pct), pct < 0);
++        return b.build();
++    }
++
++    private static String tail(File log) {
++        StringBuilder s = new StringBuilder();
++        try (BufferedReader r = new BufferedReader(new FileReader(log))) {
++            java.util.ArrayDeque<String> last = new java.util.ArrayDeque<>();
++            for (String l; (l = r.readLine()) != null; ) { last.add(l); if (last.size() > 4) last.poll(); }
++            for (String l : last) s.append(l).append(' ');
++        } catch (IOException e) { return "(no log)"; }
++        return s.toString().trim();
++    }
++
++    private static void deleteTree(File f) {
++        File[] kids = f.listFiles();
++        if (kids != null) for (File k : kids) deleteTree(k);
++        f.delete();
++    }
++}
+diff --git a/dm/tools/fc27probe.py b/dm/tools/fc27probe.py
+new file mode 100644
+index 00000000..e9270668
+--- /dev/null
++++ b/dm/tools/fc27probe.py
+@@ -0,0 +1,235 @@
++#!/usr/bin/env python3
++"""fc27probe: reads EA SPORTS FC 27's Frostbite data where it is, on the phone (Termux), from Peanuts Native's .nup (or a dump folder), and writes the
++small parts modding work needs, so nothing of the 31.8 GB game has to leave the phone but them.
++
++  python fc27probe.py tables <game.nup | dump folder> <out folder>
++      the package list, listing.tsv (every RomFS file, its size and how the .nup stores it), Data/layout.toc, Patch/layout.toc, every superbundle .toc
++  python fc27probe.py index <game.nup | dump folder> <out folder>
++      index.tsv.gz: every bundle's manifest (stored uncompressed in the cas files): each ebx / res / chunk with its name or GUID, size, res type and
++      where its stored bytes are (cas file, offset, stored size). Reads the cas files forward, one pass each.
++  python fc27probe.py all <game.nup | dump folder> <out folder>
++      tables and index (one thread per core), then modding.zip holding both: what Peanuts Nova's "Analyse for modding" runs
++  python fc27probe.py extract <game.nup | dump folder> <out folder> <regex>
++      the stored bytes (still Oodle-compressed blocks) of every ebx / res whose name matches regex, and of the chunks their bundles list, as found in
++      index.tsv.gz (run index first): items/<kind>/<name>.blocks
++
++The .nup is read with Peanuts Native's own reader (nup.py, beside this file, GPL-3.0-or-later), which needs a zstd module: Python 3.14's
++compression.zstd, else `pip install backports.zstd`. Frostbite formats after Peanuts Native's dm/gfx/tools/frostbite.py.
++"""
++import gzip, os, re, struct, sys, zipfile
++
++TOC_MAGIC, TOC_BODY, BUNDLE_MAGIC = bytes.fromhex("00d1ce01"), 0x22C, 0x9D798ED6
++
++
++# ---- the game's RomFS: a .nup package (its highest update: a full RomFS) or a dump folder's romfs
++class Source:
++    def __init__(self, path):
++        self.path = path
++        if os.path.isdir(path):
++            cands = [os.path.join(path, "romfs")] + [os.path.join(path, "updates", v, "romfs") for v in sorted(os.listdir(os.path.join(path, "updates")), key=int)] \
++                if os.path.isdir(os.path.join(path, "updates")) else [os.path.join(path, "romfs"), os.path.join(path, "base", "romfs")]
++            self.root = next((c for c in reversed(cands) if os.path.isdir(c)), None)
++            if not self.root: sys.exit(f"{path}: no romfs folder")
++            self.nup = None; self.desc = f"folder {self.root}"
++        else:
++            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++            import nup
++            self.nup = nup.Nup(path)
++            pk = self.nup.default()
++            self.desc = f"{path}: {pk!r} ({', '.join(repr(p) for p in self.nup.packages)})"
++            self.romfs = self.nup.find("romfs", ("pkg", pk.index))
++            self.exefs = self.nup.find("exefs", ("pkg", pk.index)) if pk.exefs != 0xFFFFFFFF else None
++
++    def files(self):
++        """[(path under romfs/, size, how it is stored)]"""
++        out = []
++        if self.nup is None:
++            for dp, _, fs in os.walk(self.root):
++                for f in fs:
++                    p = os.path.join(dp, f); out.append((os.path.relpath(p, self.root).replace(os.sep, "/"), os.path.getsize(p), "file"))
++            return sorted(out)
++        for rel, _, fs in self.nup.walk(self.romfs):
++            for f in fs:
++                k = self.nup.find(f"{rel}/{f}" if rel else f, self.romfs)
++                size, _, stored, _, codec = self.nup.record(k)
++                out.append((f"{rel}/{f}" if rel else f, size, "raw" if codec == 0 else f"zstd {stored}"))
++        return sorted(out)
++
++    def open(self, rel):
++        if self.nup is None: return open(os.path.join(self.root, rel), "rb")
++        return self.nup.open(self.nup.find(rel, self.romfs))
++
++    def read(self, rel):
++        with self.open(rel) as f: return f.read()
++
++    def exists(self, rel):
++        try: self.open(rel).close(); return True
++        except (FileNotFoundError, OSError): return False
++
++
++# ---- Frostbite
++def _leb(d, p):
++    v = s = 0
++    while True:
++        b = d[p]; p += 1; v |= (b & 0x7F) << s; s += 7
++        if not b & 0x80: return v, p
++
++def dbobject(d, p):
++    t = d[p]; p += 1; name = None
++    if not t & 0x80:
++        e = d.index(b"\0", p); name = d[p:e].decode(errors="replace"); p = e + 1
++    k = t & 0x1F
++    if k in (1, 2):
++        n, p = _leb(d, p); end = p + n; items = []
++        while p < end and d[p]: it, p = dbobject(d, p); items.append(it)
++        return (name, dict(items) if k == 2 else [v for _, v in items]), end
++    if k == 7: n, p = _leb(d, p); return (name, d[p:p + n - 1].decode(errors="replace")), p + n
++    if k == 19: n, p = _leb(d, p); return (name, bytes(d[p:p + n])), p + n
++    fixed = {6: ("<?", 1), 8: ("<i", 4), 9: ("<q", 8), 0xB: ("<f", 4), 0xC: ("<d", 8)}
++    if k in fixed: return (name, struct.unpack_from(fixed[k][0], d, p)[0]), p + fixed[k][1]
++    if k in (0xF, 0x10): n = 16 if k == 0xF else 20; return (name, bytes(d[p:p + n])), p + n
++    raise ValueError(f"DbObject: type {t:#x} at {p - 1:#x}")
++
++def install_chunks(src):
++    (_, lay), _ = dbobject(src.read("Data/layout.toc"), TOC_BODY)
++    return {c["persistentIndex"] & 0xFFFFFFFF: c["name"] for c in lay["installManifest"]["installChunks"]}
++
++def toc_bundles(d, what="toc"):
++    if d[:4] != TOC_MAGIC: raise ValueError(f"{what}: not a Frostbite toc")
++    if len(d) < TOC_BODY + 0x20: return []
++    B = TOC_BODY; bo, nb = struct.unpack_from(">II", d, B + 4)
++    out = []
++    for i in range(nb):
++        _, sz, off = struct.unpack_from(">IIQ", d, B + bo + 16 * i)
++        s = B + off
++        fo, n, p = struct.unpack_from(">III", d, s + 8)
++        p += s; fo += s; cas, ents = None, []
++        for k in range(n):
++            if d[fo + k] & 0x80 or cas is None: cas = bytes(d[p:p + 8]); p += 8
++            ents.append((cas,) + struct.unpack_from(">II", d, p)); p += 8
++        out.append(ents)
++    return out
++
++def cas_rel(cid, chunks):
++    pi, n = struct.unpack_from(">IH", cid, 2)
++    return f"{'Patch' if cid[1] else 'Data'}/NX/{chunks[pi]}/cas_{n:02d}.cas"
++
++def manifest(d):
++    hl = struct.unpack_from(">I", d, 0)[0]; magic, tot, ne, nr, nc, so = struct.unpack_from("<6I", d, 4)
++    if magic != BUNDLE_MAGIC: raise ValueError("no bundle manifest")
++    h = 4; p = h + 0x20 + 20 * tot
++    ebx = [struct.unpack_from("<II", d, p + 8 * i) for i in range(ne)]; p += 8 * ne
++    res = [struct.unpack_from("<II", d, p + 8 * i) for i in range(nr)]; p += 8 * nr
++    types = struct.unpack_from(f"<{nr}I", d, p); p += 4 * nr + 24 * nr
++    ch = [struct.unpack_from("<16sII", d, p + 24 * i) for i in range(nc)]
++    def name(o):
++        a = h + so + o; return bytes(d[a:d.find(b"\0", a)]).decode(errors="replace")
++    return [(name(a), s) for a, s in ebx], [(name(a), s, t) for (a, s), t in zip(res, types)], ch
++
++def tocs(src):
++    return [f for f, _, _ in src.files() if f.endswith(".toc") and f.split("/")[1:2] == ["NX"]]
++
++
++# ---- steps
++def cmd_tables(src, out):
++    os.makedirs(out, exist_ok=True)
++    files = src.files()
++    with open(os.path.join(out, "listing.tsv"), "w") as f:
++        f.write(f"# {src.desc}\n")
++        for p, s, how in files: f.write(f"{p}\t{s}\t{how}\n")
++    want = ["Data/layout.toc", "Patch/layout.toc"] + tocs(src)
++    with zipfile.ZipFile(os.path.join(out, "tables.zip"), "w", zipfile.ZIP_DEFLATED) as z:
++        z.write(os.path.join(out, "listing.tsv"), "listing.tsv")
++        for rel in want:
++            if src.exists(rel): z.writestr("romfs/" + rel, src.read(rel))
++    print(f"{len(files)} files; {len(want)} tables -> {os.path.join(out, 'tables.zip')}")
++
++def cmd_index(src, out):
++    os.makedirs(out, exist_ok=True)
++    chunks = install_chunks(src)
++    jobs = {}   # cas file -> [(offset, size, toc, bundle index, entries)]
++    for t in tocs(src):
++        for bi, ents in enumerate(toc_bundles(src.read(t), t)):
++            cid, off, size = ents[0]
++            jobs.setdefault(cas_rel(cid, chunks), []).append((off, size, t, bi, ents))
++    n = 0
++    with gzip.open(os.path.join(out, "index.tsv.gz"), "wt") as o:
++        o.write("toc\tbundle\tkind\tname\tsize\ttype\tcas\toffset\tstored\n")
++        for cas in sorted(jobs):
++            js = sorted(jobs[cas]); print(f"{cas}: {len(js)} manifests", flush=True)
++            with src.open(cas) as f:
++                for off, size, t, bi, ents in js:
++                    f.seek(off); m = f.read(size)
++                    try: ebx, res, ch = manifest(m)
++                    except ValueError: o.write(f"{t}\t{bi}\tbad\t\t{size}\t\t{cas}\t{off}\t{size}\n"); continue
++                    items = [("ebx", nm, s, "") for nm, s in ebx] + [("res", nm, s, f"{ty:08x}") for nm, s, ty in res] + [("chunk", g.hex(), ls, "") for g, lo, ls in ch]
++                    for (kind, nm, s, ty), (c, eo, es) in zip(items, ents[1:]):
++                        o.write(f"{t}\t{bi}\t{kind}\t{nm}\t{s}\t{ty}\t{cas_rel(c, chunks)}\t{eo}\t{es}\n")
++                    n += 1
++    print(f"{n} bundles -> {os.path.join(out, 'index.tsv.gz')}")
++
++def cmd_all(src, out):
++    """tables, then the index read with one thread per core (each cas file its own stream; zstd and pread run outside the GIL), then one zip of both"""
++    import concurrent.futures, time
++    t0 = time.time()
++    cmd_tables(src, out)
++    chunks = install_chunks(src)
++    jobs = {}
++    for t in tocs(src):
++        for bi, ents in enumerate(toc_bundles(src.read(t), t)):
++            cid, off, size = ents[0]
++            jobs.setdefault(cas_rel(cid, chunks), []).append((off, size, t, bi, ents))
++    total = sum(len(v) for v in jobs.values()); done = [0]
++    print(f"progress 0 {total} index", flush=True)
++    def one(cas):
++        lines = []
++        with src.open(cas) as f:
++            for off, size, t, bi, ents in sorted(jobs[cas]):
++                f.seek(off); m = f.read(size)
++                try: ebx, res, ch = manifest(m)
++                except ValueError: lines.append(f"{t}\t{bi}\tbad\t\t{size}\t\t{cas}\t{off}\t{size}\n"); continue
++                items = [("ebx", nm, s, "") for nm, s in ebx] + [("res", nm, s, f"{ty:08x}") for nm, s, ty in res] + [("chunk", g.hex(), ls, "") for g, lo, ls in ch]
++                for (kind, nm, s, ty), (c, eo, es) in zip(items, ents[1:]):
++                    lines.append(f"{t}\t{bi}\t{kind}\t{nm}\t{s}\t{ty}\t{cas_rel(c, chunks)}\t{eo}\t{es}\n")
++        return cas, lines, len(jobs[cas])
++    workers = max(1, os.cpu_count() or 1)
++    with gzip.open(os.path.join(out, "index.tsv.gz"), "wt") as o, concurrent.futures.ThreadPoolExecutor(workers) as ex:
++        o.write("toc\tbundle\tkind\tname\tsize\ttype\tcas\toffset\tstored\n")
++        for cas, lines, n in ex.map(one, sorted(jobs, key=lambda c: -len(jobs[c]))):
++            o.writelines(lines); done[0] += n
++            print(f"progress {done[0]} {total} index {cas}", flush=True)
++    with zipfile.ZipFile(os.path.join(out, "modding.zip"), "w", zipfile.ZIP_STORED) as z:
++        z.write(os.path.join(out, "tables.zip"), "tables.zip"); z.write(os.path.join(out, "index.tsv.gz"), "index.tsv.gz")
++    print(f"done: {total} bundles, {workers} threads, {time.time() - t0:.0f} s -> {os.path.join(out, 'modding.zip')}", flush=True)
++
++
++def cmd_extract(src, out, rx):
++    rx = re.compile(rx); want = []
++    with gzip.open(os.path.join(out, "index.tsv.gz"), "rt") as f:
++        next(f)
++        rows = [l.rstrip("\n").split("\t") for l in f]
++    hit = {(r[0], r[1]) for r in rows if r[2] in ("ebx", "res") and rx.search(r[3])}
++    for r in rows:
++        if (r[0], r[1]) in hit and (r[2] == "chunk" or rx.search(r[3])): want.append(r)
++    seen = set()
++    with zipfile.ZipFile(os.path.join(out, "items.zip"), "w", zipfile.ZIP_DEFLATED) as z:
++        for r in sorted(want, key=lambda r: (r[6], int(r[7]))):
++            key = (r[2], r[3])
++            if key in seen: continue
++            seen.add(key)
++            with src.open(r[6]) as f:
++                f.seek(int(r[7])); z.writestr(f"items/{r[2]}/{r[3].replace('/', '~')}.blocks", f.read(int(r[8])))
++        z.writestr("items.tsv", "".join("\t".join(r) + "\n" for r in want))
++    print(f"{len(seen)} items -> {os.path.join(out, 'items.zip')}")
++
++
++def main():
++    if len(sys.argv) < 4 or sys.argv[1] not in ("tables", "index", "all", "extract") or (sys.argv[1] == "extract" and len(sys.argv) < 5):
++        sys.exit(__doc__)
++    src = Source(sys.argv[2]); print(src.desc, flush=True)
++    {"tables": lambda: cmd_tables(src, sys.argv[3]), "index": lambda: cmd_index(src, sys.argv[3]), "all": lambda: cmd_all(src, sys.argv[3]),
++     "extract": lambda: cmd_extract(src, sys.argv[3], sys.argv[4])}[sys.argv[1]]()
++
++
++if __name__ == "__main__":
++    main()
+-- 
+2.43.0
+

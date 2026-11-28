@@ -7,6 +7,8 @@ small parts modding work needs, so nothing of the 31.8 GB game has to leave the 
   python fc27probe.py index <game.nup | dump folder> <out folder>
       index.tsv.gz: every bundle's manifest (stored uncompressed in the cas files): each ebx / res / chunk with its name or GUID, size, res type and
       where its stored bytes are (cas file, offset, stored size). Reads the cas files forward, one pass each.
+  python fc27probe.py all <game.nup | dump folder> <out folder>
+      tables and index (one thread per core), then modding.zip holding both: what Peanuts Nova's "Analyse for modding" runs
   python fc27probe.py extract <game.nup | dump folder> <out folder> <regex>
       the stored bytes (still Oodle-compressed blocks) of every ebx / res whose name matches regex, and of the chunks their bundles list, as found in
       index.tsv.gz (run index first): items/<kind>/<name>.blocks
@@ -166,6 +168,41 @@ def cmd_index(src, out):
                     n += 1
     print(f"{n} bundles -> {os.path.join(out, 'index.tsv.gz')}")
 
+def cmd_all(src, out):
+    """tables, then the index read with one thread per core (each cas file its own stream; zstd and pread run outside the GIL), then one zip of both"""
+    import concurrent.futures, time
+    t0 = time.time()
+    cmd_tables(src, out)
+    chunks = install_chunks(src)
+    jobs = {}
+    for t in tocs(src):
+        for bi, ents in enumerate(toc_bundles(src.read(t), t)):
+            cid, off, size = ents[0]
+            jobs.setdefault(cas_rel(cid, chunks), []).append((off, size, t, bi, ents))
+    total = sum(len(v) for v in jobs.values()); done = [0]
+    print(f"progress 0 {total} index", flush=True)
+    def one(cas):
+        lines = []
+        with src.open(cas) as f:
+            for off, size, t, bi, ents in sorted(jobs[cas]):
+                f.seek(off); m = f.read(size)
+                try: ebx, res, ch = manifest(m)
+                except ValueError: lines.append(f"{t}\t{bi}\tbad\t\t{size}\t\t{cas}\t{off}\t{size}\n"); continue
+                items = [("ebx", nm, s, "") for nm, s in ebx] + [("res", nm, s, f"{ty:08x}") for nm, s, ty in res] + [("chunk", g.hex(), ls, "") for g, lo, ls in ch]
+                for (kind, nm, s, ty), (c, eo, es) in zip(items, ents[1:]):
+                    lines.append(f"{t}\t{bi}\t{kind}\t{nm}\t{s}\t{ty}\t{cas_rel(c, chunks)}\t{eo}\t{es}\n")
+        return cas, lines, len(jobs[cas])
+    workers = max(1, os.cpu_count() or 1)
+    with gzip.open(os.path.join(out, "index.tsv.gz"), "wt") as o, concurrent.futures.ThreadPoolExecutor(workers) as ex:
+        o.write("toc\tbundle\tkind\tname\tsize\ttype\tcas\toffset\tstored\n")
+        for cas, lines, n in ex.map(one, sorted(jobs, key=lambda c: -len(jobs[c]))):
+            o.writelines(lines); done[0] += n
+            print(f"progress {done[0]} {total} index {cas}", flush=True)
+    with zipfile.ZipFile(os.path.join(out, "modding.zip"), "w", zipfile.ZIP_STORED) as z:
+        z.write(os.path.join(out, "tables.zip"), "tables.zip"); z.write(os.path.join(out, "index.tsv.gz"), "index.tsv.gz")
+    print(f"done: {total} bundles, {workers} threads, {time.time() - t0:.0f} s -> {os.path.join(out, 'modding.zip')}", flush=True)
+
+
 def cmd_extract(src, out, rx):
     rx = re.compile(rx); want = []
     with gzip.open(os.path.join(out, "index.tsv.gz"), "rt") as f:
@@ -187,10 +224,10 @@ def cmd_extract(src, out, rx):
 
 
 def main():
-    if len(sys.argv) < 4 or sys.argv[1] not in ("tables", "index", "extract") or (sys.argv[1] == "extract" and len(sys.argv) < 5):
+    if len(sys.argv) < 4 or sys.argv[1] not in ("tables", "index", "all", "extract") or (sys.argv[1] == "extract" and len(sys.argv) < 5):
         sys.exit(__doc__)
     src = Source(sys.argv[2]); print(src.desc, flush=True)
-    {"tables": lambda: cmd_tables(src, sys.argv[3]), "index": lambda: cmd_index(src, sys.argv[3]),
+    {"tables": lambda: cmd_tables(src, sys.argv[3]), "index": lambda: cmd_index(src, sys.argv[3]), "all": lambda: cmd_all(src, sys.argv[3]),
      "extract": lambda: cmd_extract(src, sys.argv[3], sys.argv[4])}[sys.argv[1]]()
 
 
