@@ -1,0 +1,28 @@
+fc27probe - lit FC 27 directement dans ton .nup, sur le téléphone, et n'en sort que les petits morceaux utiles au modding.
+
+1. INSTALLER TERMUX
+   Depuis F-Droid (f-droid.org) ou github.com/termux/termux-app/releases.
+   (La version du Play Store est trop ancienne.)
+
+2. PRÉPARER TERMUX (une seule fois), dans Termux :
+     termux-setup-storage          (accepte l'accès aux fichiers)
+     pkg update && pkg install python
+     python -c "from compression import zstd" || pip install backports.zstd
+
+3. COPIER CE DOSSIER fc27probe dans Téléchargements (Download), puis dans Termux :
+     cd /sdcard/Download/fc27probe
+
+4. TROUVER TON .nup :
+     find /sdcard -name "*.nup" 2>/dev/null
+   (note le chemin affiché, par exemple /sdcard/Download/FC27.nup)
+
+5. ÉTAPE 1 - les tables (quelques secondes) :
+     python fc27probe.py tables /sdcard/CHEMIN/VERS/FC27.nup /sdcard/Download/fc27out
+   Envoie /sdcard/Download/fc27out/tables.zip
+
+6. ÉTAPE 2 - la carte de tout le contenu (plusieurs minutes, laisse l'écran allumé) :
+     python fc27probe.py index /sdcard/CHEMIN/VERS/FC27.nup /sdcard/Download/fc27out
+   Envoie /sdcard/Download/fc27out/index.tsv.gz
+
+Rien n'est modifié : le .nup est seulement lu.
+Si une commande affiche une erreur, envoie-moi une capture du texte.
